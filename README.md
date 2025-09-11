@@ -2,8 +2,6 @@
 
 CNI-IIT's repository of XPS data analysis and plotting procedures.
 
-***
-
 ## Features
 
 ### Currently available
@@ -14,9 +12,11 @@ CNI-IIT's repository of XPS data analysis and plotting procedures.
 
 - Plot data and components elaborated via *CasaXPS* (`.py` version)
 
-***
+### Under development :construction:
 
-### Running the code
+- Data import and fitting (`Specs-xy-data` folder)
+
+## Running the code
 
 The provided code is intended to be executed via our **Standard execution toolbox**, i.e.:
 
@@ -24,8 +24,6 @@ The provided code is intended to be executed via our **Standard execution toolbo
 - via [*VS Code*](https://code.visualstudio.com/download) endowed with *Python* and/or *Jupyter* extensions, for any `.py` script and/or `.ipynb` files, respectively.
 
 Please, refer to the organization's guidelines for further details.
-
-***
 
 ## Development recommendations
 

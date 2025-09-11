@@ -2,8 +2,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit, minimize
 from scipy import integrate
+from scipy.special import wofz
+import pandas as pd
 import yaml
 import json
+import csv
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Callable, Union
 import os
@@ -25,13 +28,12 @@ def lorentzian(x, amplitude, center, fwhm):
     return amplitude * gamma**2 / ((x - center)**2 + gamma**2)
 
 def voigt(x, amplitude, center, fwhm_g, fwhm_l):
-    """Voigt peak function (convolution of Gaussian and Lorentzian)."""
-    # This is an approximation of the Voigt profile
+    """Accurate Voigt profile using the Faddeeva function (scipy.special.wofz)."""
     sigma = fwhm_g / (2 * np.sqrt(2 * np.log(2)))
     gamma = fwhm_l / 2
-    
-    z = ((x - center) + 1j*gamma) / (sigma * np.sqrt(2))
-    return amplitude * np.real(np.exp(-z**2) * (1 + np.math.erf(-1j * z)))
+    z = ((x - center) + 1j * gamma) / (sigma * np.sqrt(2))
+    profile = np.real(wofz(z)) / (sigma * np.sqrt(2 * np.pi))
+    return amplitude * profile
 
 def doniach_sunjic(x, amplitude, center, fwhm, asymmetry):
     """Doniach-Sunjic asymmetric line shape for XPS."""
@@ -190,12 +192,12 @@ class FitConfig:
     # Energy range for fitting
     energy_range: Tuple[float, float]
     
-    # Background configuration
-    background_type: str  # 'linear', 'shirley', 'tougaard', 'none'
-    background_params: Dict = None
-    
     # Peaks configuration
     peaks: List[PeakConfig]
+    
+    # Background configuration
+    background_type: str  # 'linear', 'shirley', 'tougaard', 'none'
+    background_params: Optional[Dict] = None
     
     # Additional fitting options
     max_iterations: int = 1000
@@ -206,7 +208,15 @@ class XPSFitter:
     def __init__(self, spectrum=None):
         """Initialize the XPS fitter with an optional spectrum."""
         self.spectrum = spectrum
-        self.fit_config = None
+        self.fit_config = FitConfig(
+            energy_range=(0.0, 0.0),
+            peaks=[],
+            background_type='none',
+            background_params={},
+            max_iterations=1000,
+            ftol=1e-8,
+            method='lm'
+        )
         self.fit_result = None
         self.background = None
         self.peak_components = []
@@ -676,6 +686,8 @@ class XPSFitter:
         
         # Chi-squared
         chi_squared = np.sum((residuals**2) / np.abs(y_fit))
+        # sigma = 30
+        # chi_squared = np.sum((residuals / sigma) ** 2)
         red_chi_squared = chi_squared / (n - p) if n > p else np.inf
         
         self.fit_result['goodness_of_fit'] = {
@@ -757,6 +769,7 @@ class XPSFitter:
             ax.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
                       va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7))
         
+        ax.invert_xaxis()
         plt.tight_layout()
         return fig, ax if not show_residuals else (ax, ax_res)
     
@@ -768,7 +781,10 @@ class XPSFitter:
         report = ["XPS Fitting Report", "=" * 20 + "\n"]
         
         # Add fitting range
-        report.append(f"Fitting range: {min(self.x_fit):.2f} - {max(self.x_fit):.2f} eV\n")
+        if self.x_fit is not None:
+            report.append(f"Fitting range: {min(self.x_fit):.2f} - {max(self.x_fit):.2f} eV\n")
+        else:
+            report.append("Fitting range: Not available (x_fit is None)\n")
         
         # Add background info
         report.append(f"Background: {self.fit_config.background_type}")
@@ -854,7 +870,7 @@ class XPSFitter:
         return self
 
 
-# Example usage
+
 if __name__ == "__main__":
     # Sample XPS data
     class XPSSpectrum:
@@ -862,83 +878,113 @@ if __name__ == "__main__":
             self.binding_energy = binding_energy
             self.counts_per_second = counts_per_second
     
-    # Generate synthetic data for a C 1s spectrum
-    be = np.linspace(290, 280, 500)  # Binding energy in eV
+    # Example usage
+    is_example = False
+    if is_example:
+        # Generate synthetic data for a C 1s spectrum
+        be = np.linspace(290, 280, 500)  # Binding energy in eV
+        
+        # Create synthetic peaks
+        peak1 = gaussian(be, 1000, 284.8, 1.1)  # sp2 carbon
+        peak2 = gaussian(be, 300, 286.3, 1.3)   # C-O
+        peak3 = gaussian(be, 200, 288.2, 1.5)   # C=O
+        
+        # Add noise and background
+        noise = np.random.normal(0, 30, size=len(be))
+        background = 200 - (be - 280) * 10
+        counts = peak1 + peak2 + peak3 + background + noise
+        
+        # Create spectrum object
+        spectrum = XPSSpectrum(be, counts)
+        
+        # Create and set up fitter
+        fitter = XPSFitter(spectrum)
+        
+        # Create configuration dictionary
+        config_dict = {
+            'energy_range': [282, 289],
+            'background_type': 'shirley',
+            'background_params': {'tolerance': 1e-6, 'max_iterations': 100},
+            'peaks': [
+                {
+                    'type': 'gaussian',
+                    'initial_amplitude': 1000,
+                    'initial_center': 284.8,
+                    'initial_fwhm': 1.0,
+                    'center_bounds': [284.4, 285.2],
+                    'fwhm_bounds': [0.5, 2.0]
+                },
+                {
+                    'type': 'gaussian',
+                    'initial_amplitude': 300,
+                    'initial_center': 286.3,
+                    'initial_fwhm': 1.2,
+                    'center_bounds': [285.8, 286.8],
+                    'fwhm_bounds': [0.5, 2.0]
+                },
+                {
+                    'type': 'gaussian',
+                    'initial_amplitude': 200,
+                    'initial_center': 288.1,
+                    'initial_fwhm': 1.4,
+                    'center_bounds': [287.5, 288.5],
+                    'fwhm_bounds': [0.5, 2.5]
+                }
+            ],
+            'max_iterations': 2000,
+            'ftol': 1e-10,
+            'method': 'trf' # lm only works when you do not specify bounds for the fit parameters
+        }
+        
+        # Load configuration and fit
+        fitter.load_config_from_dict(config_dict).fit()
+        
+        # Display results
+        print(fitter.get_fit_report())
+        
+        # Plot and save results
+        fig, axes = fitter.plot_results(figsize=(10, 8), show_components=True)
+        plt.savefig('tests/Specs-xy-data/fit_example/c1s_fit_example2.png', dpi=300, bbox_inches='tight')
+        plt.show()
+        
+        # Save all results to files
+        fitter.save_results('tests/Specs-xy-data/fit_example/c1s_fit_example2')
+        
+        
+        with open('c1s_fit_config.yaml', 'w') as f:
+            yaml.dump(config_dict, f)
+        # Example of how to load configuration from a file
+        """
+        # Save the configuration to a YAML file for future use
+        with open('c1s_fit_config.yaml', 'w') as f:
+            yaml.dump(config_dict, f)
+        
+        # Later, load the configuration from the file
+        fitter = XPSFitter(spectrum)
+        fitter.load_config_from_file('c1s_fit_config.yaml').fit()
+        """
     
-    # Create synthetic peaks
-    peak1 = gaussian(be, 1000, 284.8, 1.1)  # sp2 carbon
-    peak2 = gaussian(be, 300, 286.3, 1.3)   # C-O
-    peak3 = gaussian(be, 200, 288.2, 1.5)   # C=O
+    # Insert here your own .csv data file and configuration file
+    config_path = 'configs/c1s_fit_config.yaml'
+    file_path = 'tests/20241011_2/output_data/C1s_reference.xy_C1s_2.csv'
     
-    # Add noise and background
-    noise = np.random.normal(0, 30, size=len(be))
-    background = 200 - (be - 280) * 10
-    counts = peak1 + peak2 + peak3 + background + noise
+    csvFile = pd.read_csv(file_path, comment='#')
     
-    # Create spectrum object
+    be = csvFile['Binding Energy'].to_numpy()
+    counts = csvFile['Counts per Second'].to_numpy()
+    
     spectrum = XPSSpectrum(be, counts)
-    
-    # Create and set up fitter
     fitter = XPSFitter(spectrum)
     
-    # Create configuration dictionary
-    config_dict = {
-        'energy_range': [282, 289],
-        'background_type': 'shirley',
-        'background_params': {'tolerance': 1e-6, 'max_iterations': 100},
-        'peaks': [
-            {
-                'type': 'gaussian',
-                'initial_amplitude': 1000,
-                'initial_center': 284.8,
-                'initial_fwhm': 1.0,
-                'center_bounds': [284.4, 285.2],
-                'fwhm_bounds': [0.5, 2.0]
-            },
-            {
-                'type': 'gaussian',
-                'initial_amplitude': 300,
-                'initial_center': 286.3,
-                'initial_fwhm': 1.2,
-                'center_bounds': [285.8, 286.8],
-                'fwhm_bounds': [0.5, 2.0]
-            },
-            {
-                'type': 'gaussian',
-                'initial_amplitude': 200,
-                'initial_center': 288.1,
-                'initial_fwhm': 1.4,
-                'center_bounds': [287.5, 288.5],
-                'fwhm_bounds': [0.5, 2.5]
-            }
-        ],
-        'max_iterations': 2000,
-        'ftol': 1e-10,
-        'method': 'lm'
-    }
+    fitter.load_config_from_file(config_path).fit()
     
-    # Load configuration and fit
-    fitter.load_config_from_dict(config_dict).fit()
-    
-    # Display results
+    # Print results in terminal
     print(fitter.get_fit_report())
     
-    # Plot and save results
+    # Show results in a plot
     fig, axes = fitter.plot_results(figsize=(10, 8), show_components=True)
-    plt.savefig('c1s_fit_example.png', dpi=300, bbox_inches='tight')
+    plt.savefig('tests/result.png', dpi=300, bbox_inches='tight')
     plt.show()
     
-    # Save all results to files
-    fitter.save_results('c1s_fit')
-    
-    # Example of how to load configuration from a file
-    """
-    # Save the configuration to a YAML file for future use
-    import yaml
-    with open('c1s_fit_config.yaml', 'w') as f:
-        yaml.dump(config_dict, f)
-    
-    # Later, load the configuration from the file
-    fitter = XPSFitter(spectrum)
-    fitter.load_config_from_file('c1s_fit_config.yaml').fit()
-    """
+    # # Save all results to files
+    # fitter.save_results('tests/Specs-xy-data/fit_example/c1s_fit_example2')

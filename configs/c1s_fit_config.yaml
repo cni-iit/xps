@@ -1,0 +1,64 @@
+background_params:
+  max_iterations: 100
+  tolerance: 1.0e-06
+background_type: shirley
+energy_range:
+- 282
+- 289
+ftol: 1.0e-10
+max_iterations: 2000
+method: trf
+
+# peaks:
+# - center_bounds:
+#   - 284.4                     # lower bound of the peak center
+#   - 285.2                     # upper bound of the peak center
+#   fwhm_bounds:
+#   - 0.5                       # lower bound of the peak FWHM
+#   - 2.0                       # upper bound of the peak FWHM
+#   initial_amplitude: 1000     # initial guess for the peak amplitude
+#   initial_center: 284.8       # initial guess for the peak center
+#   initial_fwhm: 1.0           # initial guess for the peak FWHM
+#   type: gaussian              # could be gaussian, lorentzian, voigt, doniach_sunjic
+
+peaks:
+- center_bounds:                # C 1s peak
+  - 283.0
+  - 285.0
+  fwhm_bounds:
+  - 0.5
+  - 2.0
+  initial_amplitude: 2000
+  initial_center: 284.1
+  initial_fwhm: 1.0
+  type: voigt
+- center_bounds:
+  - 284.0
+  - 286.0
+  fwhm_bounds:
+  - 0.5
+  - 2.0
+  initial_amplitude: 1000
+  initial_center: 285.0
+  initial_fwhm: 1.0
+  type: voigt
+- center_bounds:
+  - 285.0
+  - 287.0
+  fwhm_bounds:
+  - 0.5
+  - 2.0
+  initial_amplitude: 1000
+  initial_center: 286.3
+  initial_fwhm: 1.0
+  type: voigt
+# - center_bounds:
+#   - 287.5
+#   - 288.5
+#   fwhm_bounds:
+#   - 0.5
+#   - 2.5
+#   initial_amplitude: 200
+#   initial_center: 288.1
+#   initial_fwhm: 1.4
+#   type: voigt

@@ -178,27 +178,33 @@ class XPSData:
 
 # Example usage
 if __name__ == "__main__":
-    # Replace with your actual file path
-    file_path = "prova.xy"
+    # Specify paths
+    data_path = "tests/20241011_2"
+    output_path = "tests/20241011_2/output_data"
     
-    xps_data = XPSData()
-    xps_data.parse_file(file_path)
-    
-    print(f"Loaded {len(xps_data.spectra)} spectra")
-    print("\nGeneral Metadata:")
-    for key, value in xps_data.general_metadata.items():
-        print(f"  {key}: {value}")
-    
-    # Example: Plot all spectra
-    fig, ax = xps_data.plot_all_spectra()
-    plt.show()
-    
-    # Example: Get a specific spectrum and plot it
-    spec = xps_data.get_spectrum_by_region("Survey")
-    if spec:
-        spec[0].plot()
-        plt.title(f"Survey Spectrum (ID: {spec[0].spectrum_id})")
-        plt.show()
-    
-    # Example: Save to CSV
-    xps_data.save_to_csv("output_data")
+    for root, dirs, files in os.walk(data_path):
+        for file in files:
+            if file.endswith(".xy"):
+                print(f"Found .xy file: {os.path.join(root, file)}")
+                
+                xps_data = XPSData()
+                xps_data.parse_file(os.path.join(root, file))
+                
+                print(f"Loaded {len(xps_data.spectra)} spectra")
+                print("\nGeneral Metadata:")
+                for key, value in xps_data.general_metadata.items():
+                    print(f"  {key}: {value}")
+                
+                # # Example: Plot all spectra
+                # fig, ax = xps_data.plot_all_spectra()
+                # plt.show()
+                
+                # # Example: Get a specific spectrum and plot it
+                # spec = xps_data.get_spectrum_by_region("Survey")
+                # if spec:
+                #     spec[0].plot()
+                #     plt.title(f"Survey Spectrum (ID: {spec[0].spectrum_id})")
+                #     plt.show()
+                
+                # Example: Save to CSV
+                xps_data.save_to_csv(output_path, base_filename=file)
