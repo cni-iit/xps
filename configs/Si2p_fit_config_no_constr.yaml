@@ -1,0 +1,66 @@
+background_params:
+  max_iterations: 100
+  tolerance: 1.0e-06
+background_type: shirley        # 'linear', 'shirley', 'tougaard', 'none'
+energy_range:
+- 97
+- 108
+ftol: 1.0e-10
+max_iterations: 2000
+method: trf
+
+sigma_type: constant             # 'poisson' ( y for std**2), 'gamma'( sqrt(y) for std**2) or 'constant' (std**2 of residuals)
+
+# peaks:
+# - center_bounds:
+#   - 284.4                     # lower bound of the peak center
+#   - 285.2                     # upper bound of the peak center
+#   fwhm_bounds:
+#   - 0.8                       # lower bound of the peak FWHM
+#   - 2.0                       # upper bound of the peak FWHM
+#   initial_amplitude: 1000     # initial guess for the peak amplitude
+#   initial_center: 284.8       # initial guess for the peak center
+#   initial_fwhm: 1.0           # initial guess for the peak FWHM
+#   type: gaussian              # 'gaussian', 'lorentzian', 'voigt', 'doniach_sunjic', 'asymmetric_voigt'
+
+peaks:
+- center_bounds:                # main Si peak from SiC
+  - 101
+  - 103
+  fwhm_bounds:
+  - 0.0
+  - 4.00
+  amplitude_bounds:
+  - 0
+  - 45000
+  initial_amplitude: 15000
+  initial_center: 102
+  initial_fwhm: 0.8
+  type: voigt
+- center_bounds:                # Si peak ?
+  - 101
+  - 103
+  fwhm_bounds:
+  - 0.0
+  - 4.00
+  amplitude_bounds:
+  - 0
+  - 45000
+  initial_amplitude: 15000
+  initial_center: 102
+  initial_fwhm: 0.8
+  type: voigt
+- center_bounds:                # Si peak ?
+  - 101
+  - 103
+  fwhm_bounds:
+  - 0.0
+  - 4.00
+  amplitude_bounds:
+  - 0
+  - 45000
+  initial_amplitude: 15000
+  initial_center: 102
+  initial_fwhm: 0.8
+  type: voigt
+

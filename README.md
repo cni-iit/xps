@@ -15,6 +15,9 @@ CNI-IIT's repository of XPS data analysis and plotting procedures.
 ### Under development :construction:
 
 - Data import and fitting (`Specs-xy-data` folder)
+  - `xy-data-import.py`: reads every .xy file in the folder and outputs it as .csv file.
+  - `xy-data-fit.py`: gets .yaml file for fitting parameters (can be done with a dict directly - see example section) and .csv data, outputs in a desired folder fit report (.txt), fit data (.csv), and images (.png, .svg and .eps).
+  - ...
 
 ## Running the code
 
@@ -24,6 +27,10 @@ The provided code is intended to be executed via our **Standard execution toolbo
 - via [*VS Code*](https://code.visualstudio.com/download) endowed with *Python* and/or *Jupyter* extensions, for any `.py` script and/or `.ipynb` files, respectively.
 
 Please, refer to the organization's guidelines for further details.
+
+## Installation
+
+See installation guide (`INSTALL.md`).
 
 ## Development recommendations
 

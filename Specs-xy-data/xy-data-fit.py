@@ -1,8 +1,12 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+import matplotlib.gridspec as gridspec
 from scipy.optimize import curve_fit, minimize
 from scipy import integrate
 from scipy.special import wofz
+from scipy.stats import norm
+from scipy.signal import savgol_filter
 import pandas as pd
 import yaml
 import json
@@ -11,6 +15,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Callable, Union
 import os
 import logging
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -71,7 +76,7 @@ def linear_background(x, slope, intercept):
     """Linear background."""
     return slope * x + intercept
 
-def shirley_background(x, y, tol=1e-5, max_iter=50):
+def shirley_background(x, y, tol=1e-5, max_iter=50, edge_pts=1):
     """
     Calculate iterative Shirley background.
     
@@ -80,6 +85,7 @@ def shirley_background(x, y, tol=1e-5, max_iter=50):
         y: intensity array
         tol: convergence tolerance
         max_iter: maximum number of iterations
+        edge_pts: number of points to average at each edge for baseline estimation
         
     Returns:
         background array
@@ -91,34 +97,41 @@ def shirley_background(x, y, tol=1e-5, max_iter=50):
         reversed = True
     else:
         reversed = False
-    
-    # Initial background
-    background = np.ones_like(y) * y[-1]
-    
-    # Iterative procedure
+
+    # Edge level estimates (average over edge_pts)
+    y_highE = np.mean(y[:edge_pts])      # first points (high BE, left side in XPS)
+    y_lowE = np.mean(y[-edge_pts:])      # last points (low BE, right side in XPS)
+
+    # Initial background (flat at low-energy side)
+    background = np.ones_like(y) * y_lowE
+
+    # Iterative Shirley background calculation
     for _ in range(max_iter):
-        # Calculate the integral of spectrum above background
+        # Integrated difference (trapezoidal)
         integral = np.zeros_like(y)
-        for i in range(len(y)-1, -1, -1):  # Backward iteration
-            if i < len(y) - 1:
-                integral[i] = integral[i+1] + (y[i] - background[i] + y[i+1] - background[i+1]) * (x[i] - x[i+1]) / 2
-        
-        # Normalize the integral
-        integral = integral / integral[0] if integral[0] > 0 else integral
-        
-        # Calculate new background
-        new_background = y[-1] + (y[0] - y[-1]) * integral
-        
-        # Check convergence
+        for i in range(len(y) - 2, -1, -1):  # integrate backward
+            integral[i] = integral[i+1] + 0.5 * ( (y[i] - background[i]) +
+                                                  (y[i+1] - background[i+1]) ) * (x[i] - x[i+1])
+
+        # Normalize
+        if integral[0] != 0:
+            integral /= integral[0]
+
+        # Update background using Shirley equation
+        new_background = y_lowE + (y_highE - y_lowE) * integral
+
+        # Convergence check
         if np.max(np.abs(new_background - background)) < tol:
+            background = new_background
             break
-            
+
         background = new_background
-    
+
     if reversed:
         background = background[::-1]
-        
+
     return background
+
 
 def tougaard_background(x, y, B=2866, C=1643, D=1, T=1):
     """
@@ -162,6 +175,127 @@ def tougaard_background(x, y, B=2866, C=1643, D=1, T=1):
         
     return background
 
+def calculate_voigt_fwhm(amplitude, center, fwhm_g, fwhm_l, x_range=None, n_points=1000):
+    """
+    Calculate the FWHM of a Voigt profile numerically.
+    
+    Parameters:
+    amplitude, center, fwhm_g, fwhm_l: Voigt parameters
+    x_range: range to evaluate (default: center ± 5*max(fwhm_g, fwhm_l))
+    n_points: number of points for evaluation
+    
+    Returns:
+    fwhm: calculated full width at half maximum
+    """
+    # Create evaluation range if not provided
+    if x_range is None:
+        width_estimate = max(fwhm_g, fwhm_l) * 5
+        x_range = np.linspace(center - width_estimate, center + width_estimate, n_points)
+    
+    # Evaluate the Voigt function
+    y = voigt(x_range, amplitude, center, fwhm_g, fwhm_l)
+    
+    # Find the maximum value
+    max_val = np.max(y)
+    half_max = max_val / 2
+    
+    # Find indices where the function crosses half maximum
+    above_half = y > half_max
+    left_idx = np.where(above_half)[0][0]
+    right_idx = np.where(above_half)[0][-1]
+    
+    # Interpolate to find exact crossing points
+    # Left side
+    x_left = np.interp(half_max, y[left_idx-1:left_idx+1][::-1], 
+                       x_range[left_idx-1:left_idx+1][::-1])
+    # Right side
+    x_right = np.interp(half_max, y[right_idx:right_idx+2], 
+                        x_range[right_idx:right_idx+2])
+    
+    return abs(x_right - x_left)
+
+def calculate_doniach_sunjic_widths(amplitude, center, fwhm, asymmetry, x_range=None, n_points=1000):
+    """
+    Calculate left and right half-widths at half maximum for Doniach-Sunjic function.
+    
+    Returns:
+    left_hwhm: left half-width at half maximum
+    right_hwhm: right half-width at half maximum
+    """
+    # Create evaluation range if not provided
+    if x_range is None:
+        width_estimate = fwhm * 5
+        x_range = np.linspace(center - width_estimate, center + width_estimate, n_points)
+    
+    # Evaluate the function
+    y = doniach_sunjic(x_range, amplitude, center, fwhm, asymmetry)
+    
+    # Find the maximum value
+    max_val = np.max(y)
+    half_max = max_val / 2
+    
+    # Find the peak position
+    peak_idx = np.argmax(y)
+    
+    # Find left and right crossing points
+    # Left side
+    left_side = y[:peak_idx]
+    left_x = x_range[:peak_idx]
+    left_cross = left_x[np.where(left_side >= half_max)[0][0]] if np.any(left_side >= half_max) else left_x[0]
+    
+    # Right side
+    right_side = y[peak_idx:]
+    right_x = x_range[peak_idx:]
+    right_cross = right_x[np.where(right_side >= half_max)[0][-1]] if np.any(right_side >= half_max) else right_x[-1]
+    
+    left_hwhm = center - left_cross
+    right_hwhm = right_cross - center
+    
+    return left_hwhm, right_hwhm
+
+def calculate_asymmetric_voigt_fwhm(amplitude, center, fwhm_g, fwhm_l, asymmetry, x_range=None, n_points=1000):
+    """
+    Calculate the FWHM of an asymmetric Voigt profile numerically.
+    
+    Returns:
+    fwhm: calculated full width at half maximum
+    left_hwhm: left half-width at half maximum
+    right_hwhm: right half-width at half maximum
+    """
+    # Create evaluation range if not provided
+    if x_range is None:
+        width_estimate = max(fwhm_g, fwhm_l) * 5
+        x_range = np.linspace(center - width_estimate, center + width_estimate, n_points)
+    
+    # Evaluate the function
+    y = asymmetric_voigt(x_range, amplitude, center, fwhm_g, fwhm_l, asymmetry)
+    
+    # Find the maximum value
+    max_val = np.max(y)
+    half_max = max_val / 2
+    
+    # Find the peak position
+    peak_idx = np.argmax(y)
+    
+    # Find left and right crossing points
+    # Left side
+    left_side = y[:peak_idx]
+    left_x = x_range[:peak_idx]
+    left_cross = left_x[np.where(left_side >= half_max)[0][0]] if np.any(left_side >= half_max) else left_x[0]
+    
+    # Right side
+    right_side = y[peak_idx:]
+    right_x = x_range[peak_idx:]
+    right_cross = right_x[np.where(right_side >= half_max)[0][-1]] if np.any(right_side >= half_max) else right_x[-1]
+    
+    fwhm = right_cross - left_cross
+    left_hwhm = center - left_cross
+    right_hwhm = right_cross - center
+    
+    return abs(fwhm), left_hwhm, right_hwhm
+
+
+
 @dataclass
 class PeakConfig:
     """Configuration for a peak in XPS fitting."""
@@ -203,6 +337,10 @@ class FitConfig:
     max_iterations: int = 1000
     ftol: float = 1e-8
     method: str = 'lm'  # 'lm', 'trf', 'dogbox'
+    
+    # Sigma type for weighting residuals
+    sigma_type: str = 'poisson'  # 'poisson', 'gamma', 'constant'
+    sigma_value: float = 30.0  # Used only if sigma_type is 'constant'
 
 class XPSFitter:
     def __init__(self, spectrum=None):
@@ -215,7 +353,9 @@ class XPSFitter:
             background_params={},
             max_iterations=1000,
             ftol=1e-8,
-            method='lm'
+            method='lm',
+            sigma_type='poisson',
+            sigma_value=30
         )
         self.fit_result = None
         self.background = None
@@ -284,7 +424,8 @@ class XPSFitter:
             peaks=peaks_configs,
             max_iterations=config_dict.get('max_iterations', 1000),
             ftol=config_dict.get('ftol', 1e-8),
-            method=config_dict.get('method', 'lm')
+            method=config_dict.get('method', 'lm'),
+            sigma_type=config_dict.get('sigma_type', 'poisson'),
         )
         
         return self
@@ -607,6 +748,9 @@ class XPSFitter:
         # Prepare initial parameters and bounds
         initial_params, bounds, fixed_param_values = self._prepare_initial_params_and_bounds()
         
+        # Estimate sigma for fitting
+        # sigma = np.sqrt(np.clip(y_no_bg, 0, None) + 0.1)  # Avoid zero or negative values
+        
         # If we have fixed parameters, use a different approach
         if fixed_param_values:
             # Create objective function that handles fixed parameters
@@ -685,9 +829,20 @@ class XPSFitter:
         adj_r_squared = 1 - (1 - r_squared) * ((n - 1) / (n - p - 1)) if n > p + 1 else 0
         
         # Chi-squared
-        chi_squared = np.sum((residuals**2) / np.abs(y_fit))
-        # sigma = 30
-        # chi_squared = np.sum((residuals / sigma) ** 2)
+        sigma_type = self.fit_config.sigma_type if hasattr(self.fit_config, 'sigma_type') else 'poisson'
+        
+        match sigma_type:
+            case 'poisson':
+                chi_squared = np.sum((residuals**2) / np.clip(y, 5e-2, None))  # Avoid division by zero
+            case 'gamma':
+                chi_squared = np.sum((residuals**2) / np.sqrt(np.clip(y, 5e-2, None)))  # Avoid division by zero
+            case 'constant':
+                sigma_value = np.std(residuals)
+                chi_squared = np.sum( (residuals**2) / (sigma_value**2) )
+            case _:
+                raise ValueError(f"Unknown sigma_type: {sigma_type}")
+        
+        # Reduced chi-squared
         red_chi_squared = chi_squared / (n - p) if n > p else np.inf
         
         self.fit_result['goodness_of_fit'] = {
@@ -701,8 +856,9 @@ class XPSFitter:
         return self
     
     def plot_results(self, fig=None, ax=None, figsize=(10, 8), show_components=True, 
-                     show_residuals=True, show_background=True, dpi=100):
-        """Plot the fitting results."""
+                    show_residuals=True, show_background=True, dpi=100,
+                    show_residual_hist=True, bins=30):
+        """Plot the fitting results with optional residual histogram."""
         if self.fit_result is None:
             raise ValueError("No fit results available. Run fit() first.")
         
@@ -714,51 +870,138 @@ class XPSFitter:
         residuals = self.fit_result['residuals']
         peak_components = self.fit_result['peak_components']
         
-        # Create figure
+        # Create figure with GridSpec
         if fig is None or ax is None:
             if show_residuals:
-                fig, (ax_main, ax_res) = plt.subplots(2, 1, figsize=figsize, 
-                                                    gridspec_kw={'height_ratios': [3, 1]},
-                                                    sharex=True, dpi=dpi)
-                ax = ax_main
+                if show_residual_hist:
+                    fig = plt.figure(figsize=figsize, dpi=dpi)
+                    gs = gridspec.GridSpec(2, 2, width_ratios=[4, 1], height_ratios=[3, 1],
+                                        wspace=0.05, hspace=0.10)
+                    ax_main = fig.add_subplot(gs[0, 0])
+                    ax_res  = fig.add_subplot(gs[1, 0], sharex=ax_main)
+                    ax_hist = fig.add_subplot(gs[1, 1], sharey=ax_res)
+                else:
+                    fig, (ax_main, ax_res) = plt.subplots(2, 1, figsize=figsize, 
+                                                        gridspec_kw={'height_ratios': [3, 1]},
+                                                        sharex=True, dpi=dpi)
+                    ax_hist = None
             else:
                 fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
-                ax_res = None
+                ax_res, ax_hist = None, None
+                ax_main = ax
+        else:
+            ax_main = ax
+            ax_res, ax_hist = None, None
         
         # Plot original data
-        ax.scatter(x, y, s=20, alpha=0.7, label='Data', color='black')
+        ax_main.scatter(x, y, s=20, alpha=0.7, label='Data', color='black')
         
-        # Plot background if requested
+        # Background
         if show_background and np.any(background != 0):
-            ax.plot(x, background, '--', color='gray', alpha=0.7, label='Background')
+            ax_main.plot(x, background, '--', color='gray', alpha=0.7,
+                        label=f'Background\ntype: {self.fit_config.background_type}')
         
-        # Plot individual components if requested
+        # Components
         if show_components:
             for i, component in enumerate(peak_components):
-                ax.plot(x, component['y_values'] + background, '-', alpha=0.6, 
-                      label=f"{component['type']} at {component['params']['center']:.2f} eV")
+                ax_main.plot(x, component['y_values'] + background, '-', alpha=0.6,
+                            label=f"{component['type']}\nat {component['params']['center']:.2f} eV")
+                ax_main.axline(xy1=(component['params']['center'], ax_main.get_ylim()[0]),
+                               xy2=(component['params']['center'], component['params']['amplitude']),
+                               linestyle=':', alpha=0.5)
         
-        # Plot total fit
-        ax.plot(x, y_fit + background, 'r-', linewidth=2, label='Fit')
+        # Total fit
+        ax_main.plot(x, y_fit + background, 'r-', linewidth=2, label='Fit')
         
-        # Plot residuals if requested
+        # Residuals
         if show_residuals and ax_res is not None:
             ax_res.plot(x, residuals, 'o-', markersize=3, color='blue')
-            ax_res.axhline(y=0, color='r', linestyle='-', alpha=0.5)
-            ax_res.set_ylabel('Residuals')
+            ax_res.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+            
+            # # Add Savitzky-Golay filtered envelope
+            # try:
+            #     # Determine window length (must be odd and less than data length)
+            #     # For X% of data points
+            #     window_length = int(len(residuals) * 0.25)
+
+            #     # Make sure it's odd for Savitzky-Golay
+            #     if window_length % 2 == 0:
+            #         window_length += 1  # Make it odd
+
+            #     # Ensure it's within valid range (at least 5, at most len(residuals))
+            #     window_length = max(5, min(window_length, len(residuals)))
+                
+            #     # Apply Savitzky-Golay filter
+            #     smoothed_residuals = savgol_filter(residuals, window_length, 3)  # 3rd order polynomial
+                
+            #     # Plot the smoothed envelope
+            #     ax_res.plot(x, smoothed_residuals, '--', color='red', linewidth=1.5, alpha=0.8, label='Smoothed residuals')
+                
+            #     # Optionally, you can also plot a shaded region around the smoothed line
+            #     residual_std = np.std(residuals - smoothed_residuals)
+            #     # ax_res.fill_between(x, smoothed_residuals - 2*residual_std, 
+            #     #                    smoothed_residuals + 2*residual_std, 
+            #     #                    color='red', alpha=0.1, label='±2σ envelope')
+                
+            # except Exception as e:
+            #     logger.warning(f"Could not apply Savitzky-Golay filter: {e}")
+            #     # Fallback: plot simple moving average
+            #     window_size = min(10, len(residuals))
+            #     if window_size > 0:
+            #         weights = np.ones(window_size) / window_size
+            #         smoothed_residuals = np.convolve(residuals, weights, mode='same')
+            #         ax_res.plot(x, smoothed_residuals, '--', color='grey', linewidth=1.5, alpha=0.8, label='Smoothed residuals')
+            
+            ax_res.set_ylabel('Residuals (a.u.)')
             ax_res.set_xlabel('Binding Energy (eV)')
             ax_res.grid(True, alpha=0.3)
+            # ax_res.yaxis.set_major_locator(ticker.MultipleLocator(20))
+            # ax_res.yaxis.set_minor_locator(ticker.MultipleLocator(5))
         
-        # Add labels and legend
-        ax.set_ylabel('Intensity (a.u.)')
+        # Residual histogram
+        if show_residual_hist and ax_hist is not None:
+            # Histogram
+            counts, bin_edges, _ = ax_hist.hist(
+                residuals, bins=bins, orientation='horizontal',
+                color='blue', alpha=0.7, edgecolor='black', density=True
+            )
+
+            # Fit Gaussian
+            mu, sigma = np.mean(residuals), np.std(residuals)
+
+            # Compute Gaussian curve
+            y_vals = np.linspace(min(residuals), max(residuals), 300)
+            pdf_vals = norm.pdf(y_vals, mu, sigma)
+
+            # Normalize to match histogram scaling (density=True handles it)
+            ax_hist.plot(pdf_vals, y_vals, 'r-', lw=2, label=f'Gaussian\n$\\mu={mu:.3f}$\n$\\sigma={sigma:.3f}$')
+            ax_hist.axhline(y=0, color='black', linestyle='-', alpha=0.5)
+
+            ax_hist.set_xlabel("Density")
+            ax_hist.grid(True, alpha=0.3)
+            ax_hist.legend(loc="lower right", frameon=True, fontsize='x-small')
+
+            # Hide duplicate y ticks
+            plt.setp(ax_hist.get_yticklabels(), visible=False)
+        
+        # Labels and legend
+        ax_main.set_ylabel('Intensity (a.u.)')
         if not show_residuals:
-            ax.set_xlabel('Binding Energy (eV)')
-        ax.grid(True, alpha=0.3)
-        ax.legend(loc='best', frameon=True)
+            ax_main.set_xlabel('Binding Energy (eV)')
+        ax_main.grid(which='major', alpha=0.3)
+        ax_main.legend(loc='center left', frameon=True, fontsize='small')
+        # ax_main.xaxis.set_major_locator(ticker.MultipleLocator(1))
+        # ax_main.xaxis.set_minor_locator(ticker.MultipleLocator(0.1))
+        # ax_main.yaxis.set_major_locator(ticker.MultipleLocator(250))
+        # ax_main.yaxis.set_minor_locator(ticker.MultipleLocator(50))
         
-        # XPS convention: higher binding energy on left
+        
+        
+        # Invert X (XPS convention)
         if x[0] < x[-1]:
-            ax.invert_xaxis()
+            ax_main.invert_xaxis()
+        if ax_res is not None:
+            ax_res.invert_xaxis()
         
         # Add goodness of fit text
         if 'goodness_of_fit' in self.fit_result:
@@ -766,15 +1009,15 @@ class XPSFitter:
             fit_text = (f"R² = {gof['r_squared']:.4f}\n"
                         f"Adj. R² = {gof['adj_r_squared']:.4f}\n"
                         f"Red. χ² = {gof['reduced_chi_squared']:.4f}")
-            ax.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
-                      va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7))
+            ax_main.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
+                            va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7))
         
-        ax.invert_xaxis()
+        
         plt.tight_layout()
-        return fig, ax if not show_residuals else (ax, ax_res)
+        return fig, (ax_main, ax_res, ax_hist)
     
     def get_fit_report(self):
-        """Generate a detailed fit report."""
+        """Generate a detailed fit report with parameter uncertainties."""
         if self.fit_result is None:
             raise ValueError("No fit results available. Run fit() first.")
         
@@ -792,20 +1035,29 @@ class XPSFitter:
             report.append(f"Background parameters: {self.fit_config.background_params}")
         report.append("")
         
+        # Get uncertainties (perr)
+        perr = self.fit_result.get("perr", None)
+        
         # Add peak info
         report.append("Fitted Peaks:")
         report.append("-" * 15)
         
+        param_index = 0  # track position inside params/perr arrays
         for i, component in enumerate(self.peak_components):
-            params = component['params']
+            params = component["params"]
             report.append(f"Peak {i+1} ({component['type']}):")
             
             for name, value in params.items():
-                report.append(f"  {name}: {value:.4f}")
-                
+                if perr is not None and param_index < len(perr):
+                    err = perr[param_index]
+                    report.append(f"  {name}: {value:.4f} +/- {err:.4f}")
+                else:
+                    report.append(f"  {name}: {value:.4f}")
+                param_index += 1
+            
             # Calculate peak area
-            x = self.fit_result['x']
-            y = component['y_values']
+            x = self.fit_result["x"]
+            y = component["y_values"]
             dx = np.mean(np.diff(x))
             area = np.sum(y) * abs(dx)
             
@@ -813,26 +1065,34 @@ class XPSFitter:
             report.append("")
         
         # Add goodness of fit metrics
-        if 'goodness_of_fit' in self.fit_result:
+        if "goodness_of_fit" in self.fit_result:
             report.append("Goodness of Fit:")
             report.append("-" * 15)
             
-            gof = self.fit_result['goodness_of_fit']
+            gof = self.fit_result["goodness_of_fit"]
             report.append(f"R-squared: {gof['r_squared']:.6f}")
             report.append(f"Adjusted R-squared: {gof['adj_r_squared']:.6f}")
             report.append(f"Chi-squared: {gof['chi_squared']:.6f}")
             report.append(f"Reduced chi-squared: {gof['reduced_chi_squared']:.6f}")
         
         return "\n".join(report)
+
     
     def save_results(self, filename_prefix):
         """Save fitting results to files."""
         if self.fit_result is None:
             raise ValueError("No fit results available. Run fit() first.")
         
+        # Ensure the directory exists
+        directory = os.path.dirname(filename_prefix)
+        if directory and not os.path.exists(directory):
+            os.makedirs(directory)
+        
         # Save plot
         fig, _ = self.plot_results()
         fig.savefig(f"{filename_prefix}_fit.png", dpi=300, bbox_inches='tight')
+        fig.savefig(f"{filename_prefix}_fit.svg", dpi=300, bbox_inches='tight', transparent=True)
+        fig.savefig(f"{filename_prefix}_fit.eps", dpi=300, bbox_inches='tight', transparent=True)
         plt.close(fig)
         
         # Save fit report
@@ -868,6 +1128,50 @@ class XPSFitter:
             
         logger.info(f"Results saved with prefix: {filename_prefix}")
         return self
+    
+    def calculate_peak_widths(self):
+        """Calculate widths for all fitted peaks."""
+        if self.fit_result is None:
+            raise ValueError("No fit results available. Run fit() first.")
+        
+        width_results = {}
+        x = self.fit_result['x']
+        
+        for i, component in enumerate(self.peak_components):
+            peak_type = component['type']
+            params = component['params']
+            
+            if peak_type == 'voigt':
+                fwhm = calculate_voigt_fwhm(
+                    params['amplitude'], params['center'], 
+                    params['fwhm_g'], params['fwhm_l'], x_range=x
+                )
+                width_results[f'peak_{i+1}'] = {'type': 'voigt', 'fwhm': fwhm}
+                
+            elif peak_type == 'doniach_sunjic':
+                left_hwhm, right_hwhm = calculate_doniach_sunjic_widths(
+                    params['amplitude'], params['center'], 
+                    params['fwhm'], params['asymmetry'], x_range=x
+                )
+                width_results[f'peak_{i+1}'] = {
+                    'type': 'doniach_sunjic', 
+                    'left_hwhm': left_hwhm, 
+                    'right_hwhm': right_hwhm
+                }
+                
+            elif peak_type == 'asymmetric_voigt':
+                fwhm, left_hwhm, right_hwhm = calculate_asymmetric_voigt_fwhm(
+                    params['amplitude'], params['center'], 
+                    params['fwhm_g'], params['fwhm_l'], params['asymmetry'], x_range=x
+                )
+                width_results[f'peak_{i+1}'] = {
+                    'type': 'asymmetric_voigt', 
+                    'fwhm': fwhm,
+                    'left_hwhm': left_hwhm, 
+                    'right_hwhm': right_hwhm
+                }
+        
+        return width_results
 
 
 
@@ -944,15 +1248,15 @@ if __name__ == "__main__":
         
         # Plot and save results
         fig, axes = fitter.plot_results(figsize=(10, 8), show_components=True)
-        plt.savefig('tests/Specs-xy-data/fit_example/c1s_fit_example2.png', dpi=300, bbox_inches='tight')
+        # plt.savefig('tests/Specs-xy-data/fit_example/c1s_fit_example2.png', dpi=300, bbox_inches='tight')
         plt.show()
         
         # Save all results to files
-        fitter.save_results('tests/Specs-xy-data/fit_example/c1s_fit_example2')
+        # fitter.save_results('tests/Specs-xy-data/fit_example/c1s_fit_example2')
         
         
-        with open('c1s_fit_config.yaml', 'w') as f:
-            yaml.dump(config_dict, f)
+        # with open('c1s_fit_config.yaml', 'w') as f:
+        #     yaml.dump(config_dict, f)
         # Example of how to load configuration from a file
         """
         # Save the configuration to a YAML file for future use
@@ -965,7 +1269,7 @@ if __name__ == "__main__":
         """
     
     # Insert here your own .csv data file and configuration file
-    config_path = 'configs/c1s_fit_config.yaml'
+    config_path = 'configs/C1s_fit_config_no_constr.yaml'
     file_path = 'tests/20241011_2/output_data/C1s_reference.xy_C1s_2.csv'
     
     csvFile = pd.read_csv(file_path, comment='#')
@@ -973,18 +1277,46 @@ if __name__ == "__main__":
     be = csvFile['Binding Energy'].to_numpy()
     counts = csvFile['Counts per Second'].to_numpy()
     
+    # Normalize data (optional)
+    # counts -= np.min(counts)
+    # counts /= np.max(counts)
+    
     spectrum = XPSSpectrum(be, counts)
     fitter = XPSFitter(spectrum)
     
     fitter.load_config_from_file(config_path).fit()
     
     # Print results in terminal
-    print(fitter.get_fit_report())
+    fit_report = fitter.get_fit_report()
+    print(fit_report)
+    
+    # # Area ratio for buffer layer analysis in C1s range
+    # # Find all area values in the report
+    # area_matches = re.findall(r'area: (\d+\.\d+)', fit_report)
+    # if len(area_matches) >= 2:
+    #     # Convert to floats
+    #     areas = [float(area) for area in area_matches]
+        
+    #     # Get the last two areas
+    #     last_area = areas[-1]
+    #     second_last_area = areas[-2]
+        
+    #     # Calculate ratio
+    #     if second_last_area > 0:
+    #         ratio = last_area / (second_last_area + last_area) *100
+    #         print(f"\nPeak Area Ratio : {ratio:.2f}% ({100-ratio:.2f}%)")
+    #     else:
+    #         print("\nCannot calculate ratio: division by zero")
+    # else:
+    #     print("\nNot enough peaks found to calculate ratio")
+    
+    # print('\n', fitter.calculate_peak_widths())
+    
     
     # Show results in a plot
     fig, axes = fitter.plot_results(figsize=(10, 8), show_components=True)
-    plt.savefig('tests/result.png', dpi=300, bbox_inches='tight')
+    # plt.savefig('tests/result.png', dpi=300, bbox_inches='tight')
     plt.show()
     
     # # Save all results to files
-    # fitter.save_results('tests/Specs-xy-data/fit_example/c1s_fit_example2')
+    # fitter.save_results('tests/C_1s_reference_fit/C_1s_3fit_no_constr_norm')

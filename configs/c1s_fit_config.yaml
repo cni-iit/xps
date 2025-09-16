@@ -1,7 +1,7 @@
 background_params:
   max_iterations: 100
   tolerance: 1.0e-06
-background_type: shirley
+background_type: shirley        # 'linear', 'shirley', 'tougaard', 'none'
 energy_range:
 - 282
 - 289
@@ -14,51 +14,94 @@ method: trf
 #   - 284.4                     # lower bound of the peak center
 #   - 285.2                     # upper bound of the peak center
 #   fwhm_bounds:
-#   - 0.5                       # lower bound of the peak FWHM
+#   - 0.8                       # lower bound of the peak FWHM
 #   - 2.0                       # upper bound of the peak FWHM
 #   initial_amplitude: 1000     # initial guess for the peak amplitude
 #   initial_center: 284.8       # initial guess for the peak center
 #   initial_fwhm: 1.0           # initial guess for the peak FWHM
-#   type: gaussian              # could be gaussian, lorentzian, voigt, doniach_sunjic
+#   type: gaussian              # 'gaussian', 'lorentzian', 'voigt', 'doniach_sunjic', 'asymmetric_voigt'
 
 peaks:
-- center_bounds:                # C 1s peak
-  - 283.0
-  - 285.0
+- center_bounds:                # main C peak from SiC
+  - 283.5
+  - 284.5
   fwhm_bounds:
-  - 0.5
-  - 2.0
-  initial_amplitude: 2000
-  initial_center: 284.1
-  initial_fwhm: 1.0
+  - 0.0
+  - 2.00
+  amplitude_bounds:
+  - 2000
+  - 5000
+  initial_amplitude: 2100
+  initial_center: 283.8
+  initial_fwhm: 0.8
   type: voigt
-- center_bounds:
-  - 284.0
-  - 286.0
-  fwhm_bounds:
-  - 0.5
-  - 2.0
-  initial_amplitude: 1000
-  initial_center: 285.0
-  initial_fwhm: 1.0
-  type: voigt
-- center_bounds:
-  - 285.0
-  - 287.0
-  fwhm_bounds:
-  - 0.5
-  - 2.0
-  initial_amplitude: 1000
-  initial_center: 286.3
-  initial_fwhm: 1.0
-  type: voigt
-# - center_bounds:
-#   - 287.5
-#   - 288.5
+
+# - center_bounds:                # graphene peak - if the sample is fully/partially covered with graphene
+#   - 284.2
+#   - 284.6
 #   fwhm_bounds:
-#   - 0.5
-#   - 2.5
-#   initial_amplitude: 200
-#   initial_center: 288.1
-#   initial_fwhm: 1.4
+#   - 0.0
+#   - 2.00
+#   amplitude_bounds:
+#   - 100
+#   - 4000
+#   initial_amplitude: 300
+#   initial_center: 284.4
+#   initial_fwhm: 0.8
+#   type: asymmetric_voigt
+
+- center_bounds:                # C peak from buffer layer (2/3)
+  - 285.5
+  - 286.5
+  fwhm_bounds:
+  - 0.0
+  - 2.00
+  amplitude_bounds:
+  - 100
+  - 5000
+  initial_amplitude: 1000
+  initial_center: 286.0
+  initial_fwhm: 0.8
+  type: voigt
+
+- center_bounds:               # C peak from buffer layer (1/3)
+  - 284.5
+  - 285.5
+  fwhm_bounds:
+  - 0.0
+  - 2.00
+  amplitude_bounds:
+  - 100
+  - 5000
+  initial_amplitude: 500
+  initial_center: 285.0
+  initial_fwhm: 0.8
+  type: voigt
+
+# - center_bounds:                # C peak from buffer layer (2/3) + graphene
+#   - 285.0
+#   - 285.6
+#   fwhm_bounds:
+#   - 0.4
+#   - 2.0
+#   amplitude_bounds:
+#     - 100
+#     - 5000
+#   initial_amplitude: 660
+#   initial_center: 285.3
+#   initial_fwhm: 0.8
+#   type: voigt
+
+# - center_bounds:               # C peak from buffer layer (1/3) + graphene
+#   - 284.9
+#   - 285.5
+#   fwhm_bounds:
+#   - 0.4
+#   - 2.0
+#   amplitude_bounds:
+#   - 100
+#   - 5000
+#   initial_amplitude: 500
+#   initial_center: 285.2
+#   initial_fwhm: 0.8
 #   type: voigt
