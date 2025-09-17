@@ -981,11 +981,24 @@ class XPSFitter:
             #         smoothed_residuals = np.convolve(residuals, weights, mode='same')
             #         ax_res.plot(x, smoothed_residuals, '--', color='grey', linewidth=1.5, alpha=0.8, label='Smoothed residuals')
             
+            residual_span = abs(max(residuals) - min(residuals))
+            raw_step = residual_span / 5
+
+            # Round to nearest multiple of 10
+            step = int(round(raw_step / 10.0) * 10)
+
+            # Fallback: if residuals are very small, avoid step=0
+            if step == 0:
+                step = max(1, int(round(raw_step)))
             ax_res.set_ylabel('Residuals (counts/s)')
             ax_res.set_xlabel('Binding Energy (eV)')
             ax_res.grid(True, alpha=0.3)
-            # ax_res.yaxis.set_major_locator(ticker.MultipleLocator(20))
-            # ax_res.yaxis.set_minor_locator(ticker.MultipleLocator(5))
+            ax_res.yaxis.set_major_locator(
+                ticker.MultipleLocator(step)
+                )
+            ax_res.yaxis.set_minor_locator(
+                ticker.MultipleLocator(step / 2)
+                )
         
         # Residual histogram
         if show_residual_hist and ax_hist is not None:
@@ -1019,10 +1032,20 @@ class XPSFitter:
             ax_main.set_xlabel('Binding Energy (eV)')
         ax_main.grid(which='major', alpha=0.3)
         ax_main.legend(loc='center left', frameon=True, fontsize='small')
-        # ax_main.xaxis.set_major_locator(ticker.MultipleLocator(1))
-        # ax_main.xaxis.set_minor_locator(ticker.MultipleLocator(0.1))
-        # ax_main.yaxis.set_major_locator(ticker.MultipleLocator(250))
-        # ax_main.yaxis.set_minor_locator(ticker.MultipleLocator(50))
+        ax_main.xaxis.set_major_locator(ticker.MultipleLocator(1))
+        ax_main.xaxis.set_minor_locator(ticker.MultipleLocator(0.1))
+        
+        y_span = abs(max(y) - min(y))
+        raw_y_step = y_span / 5
+
+        # Round to nearest multiple of 500
+        y_step = int(round(raw_y_step / 500.0) * 500)
+
+        # Fallback: if residuals are very small, avoid step=0
+        if y_step == 0:
+            y_step = max(1, int(round(raw_step)))
+        ax_main.yaxis.set_major_locator(ticker.MultipleLocator(y_step))
+        ax_main.yaxis.set_minor_locator(ticker.MultipleLocator(y_step/5))
         
         
         
