@@ -1,5 +1,5 @@
 background_params:
-  max_iterations: 100
+  max_iterations: 200
   tolerance: 1.0e-06
 background_type: shirley        # 'linear', 'shirley', 'tougaard', 'none'
 energy_range:
@@ -9,7 +9,7 @@ ftol: 1.0e-10
 max_iterations: 2000
 method: trf
 
-sigma_type: constant             # 'poisson' ( y for std**2), 'gamma'( sqrt(y) for std**2) or 'constant' (std**2 of residuals)
+sigma_type: poisson             # 'poisson' ( y for std**2), 'gamma'( sqrt(y) for std**2) or 'constant' (std**2 of residuals)
 
 # peaks:
 # - center_bounds:
@@ -66,4 +66,16 @@ peaks:
   initial_fwhm: 0.8
   type: voigt
 
-
+# - center_bounds:                # graphene peak
+#   - 282
+#   - 289
+#   fwhm_bounds:
+#   - 0.0
+#   - 2.00
+#   amplitude_bounds:
+#   - 0
+#   - 10000
+#   initial_amplitude: 2100
+#   initial_center: 284.5
+#   initial_fwhm: 0.8
+#   type: doniach_sunjic

@@ -9,7 +9,7 @@ ftol: 1.0e-10
 max_iterations: 2000
 method: trf
 
-sigma_type: constant             # 'poisson' ( y for std**2), 'gamma'( sqrt(y) for std**2) or 'constant' (std**2 of residuals)
+sigma_type: poisson             # 'poisson' ( y for std**2), 'gamma'( sqrt(y) for std**2) or 'constant' (std**2 of residuals)
 
 # peaks:
 # - center_bounds:
@@ -50,17 +50,16 @@ peaks:
   initial_center: 102
   initial_fwhm: 0.8
   type: voigt
-- center_bounds:                # Si peak ?
-  - 101
-  - 103
-  fwhm_bounds:
-  - 0.0
-  - 4.00
-  amplitude_bounds:
-  - 0
-  - 45000
-  initial_amplitude: 15000
-  initial_center: 102
-  initial_fwhm: 0.8
-  type: voigt
-
+# - center_bounds:                # Si peak ?
+#   - 101
+#   - 103
+#   fwhm_bounds:
+#   - 0.0
+#   - 4.00
+#   amplitude_bounds:
+#   - 0
+#   - 45000
+#   initial_amplitude: 15000
+#   initial_center: 102
+#   initial_fwhm: 0.8
+#   type: voigt

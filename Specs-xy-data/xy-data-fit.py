@@ -21,6 +21,30 @@ import re
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('XPSFit')
 
+def read_xps_csv(file_path):
+    metadata = {}
+    header_lines = []
+    
+    # Read file once line by line
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.startswith('#'):
+                header_lines.append(line.strip())
+            else:
+                # First non-# line is the CSV header, stop reading header
+                break
+    
+    # Extract dwell time and number of scans from header
+    for line in header_lines:
+        if "Dwell Time" in line:
+            metadata["dwell_time"] = float(line.split(':', 1)[1].strip())
+        if "Number of Scans" in line:
+            metadata["n_scans"] = int(line.split(':', 1)[1].strip())
+    
+    # Now read numeric data
+    df = pd.read_csv(file_path, comment='#')
+    return df, metadata
+
 # Define lineshape functions
 def gaussian(x, amplitude, center, fwhm):
     """Gaussian peak function."""
@@ -730,7 +754,7 @@ class XPSFitter:
             
         return components
     
-    def fit(self):
+    def fit(self, dwell_time=0.096, n_scans=30):
         """Perform the fitting."""
         # Prepare data
         x, y = self._prepare_data_for_fitting()
@@ -829,28 +853,33 @@ class XPSFitter:
         adj_r_squared = 1 - (1 - r_squared) * ((n - 1) / (n - p - 1)) if n > p + 1 else 0
         
         # Chi-squared
-        sigma_type = self.fit_config.sigma_type if hasattr(self.fit_config, 'sigma_type') else 'poisson'
-        
-        match sigma_type:
-            case 'poisson':
-                chi_squared = np.sum((residuals**2) / np.clip(y, 5e-2, None))  # Avoid division by zero
-            case 'gamma':
-                chi_squared = np.sum((residuals**2) / np.sqrt(np.clip(y, 5e-2, None)))  # Avoid division by zero
-            case 'constant':
-                sigma_value = np.std(residuals)
-                chi_squared = np.sum( (residuals**2) / (sigma_value**2) )
-            case _:
-                raise ValueError(f"Unknown sigma_type: {sigma_type}")
+        denom = np.maximum(y_fit, 1e-10) / (dwell_time * n_scans)
+        chi_squared = np.sum(residuals**2 / denom)
         
         # Reduced chi-squared
         red_chi_squared = chi_squared / (n - p) if n > p else np.inf
+        
+        z = residuals / np.sqrt(denom)
+        print("z mean, std:", np.nanmean(z), np.nanstd(z))
+        
+        # autocorrelation lag-1
+        def lag1_autocorr(a):
+            a = a - np.nanmean(a)
+            a = a[~np.isnan(a)]
+            if len(a) < 2: return np.nan
+            return np.corrcoef(a[:-1], a[1:])[0,1]
+        
+        print("lag-1 autocorr of residuals: ", lag1_autocorr(residuals))
         
         self.fit_result['goodness_of_fit'] = {
             'sse': sse,
             'r_squared': r_squared,
             'adj_r_squared': adj_r_squared,
             'chi_squared': chi_squared,
-            'reduced_chi_squared': red_chi_squared
+            'reduced_chi_squared': red_chi_squared,
+            'z_mean': np.nanmean(z),
+            'z_std': np.nanstd(z),
+            'lag1_autocorr': lag1_autocorr(residuals)
         }
         
         return self
@@ -952,7 +981,7 @@ class XPSFitter:
             #         smoothed_residuals = np.convolve(residuals, weights, mode='same')
             #         ax_res.plot(x, smoothed_residuals, '--', color='grey', linewidth=1.5, alpha=0.8, label='Smoothed residuals')
             
-            ax_res.set_ylabel('Residuals (a.u.)')
+            ax_res.set_ylabel('Residuals (counts/s)')
             ax_res.set_xlabel('Binding Energy (eV)')
             ax_res.grid(True, alpha=0.3)
             # ax_res.yaxis.set_major_locator(ticker.MultipleLocator(20))
@@ -977,7 +1006,7 @@ class XPSFitter:
             ax_hist.plot(pdf_vals, y_vals, 'r-', lw=2, label=f'Gaussian\n$\\mu={mu:.3f}$\n$\\sigma={sigma:.3f}$')
             ax_hist.axhline(y=0, color='black', linestyle='-', alpha=0.5)
 
-            ax_hist.set_xlabel("Density")
+            ax_hist.set_xlabel("Density (a.u.)")
             ax_hist.grid(True, alpha=0.3)
             ax_hist.legend(loc="lower right", frameon=True, fontsize='x-small')
 
@@ -985,7 +1014,7 @@ class XPSFitter:
             plt.setp(ax_hist.get_yticklabels(), visible=False)
         
         # Labels and legend
-        ax_main.set_ylabel('Intensity (a.u.)')
+        ax_main.set_ylabel('Counts per second (counts/s)')
         if not show_residuals:
             ax_main.set_xlabel('Binding Energy (eV)')
         ax_main.grid(which='major', alpha=0.3)
@@ -1006,9 +1035,11 @@ class XPSFitter:
         # Add goodness of fit text
         if 'goodness_of_fit' in self.fit_result:
             gof = self.fit_result['goodness_of_fit']
-            fit_text = (f"R² = {gof['r_squared']:.4f}\n"
-                        f"Adj. R² = {gof['adj_r_squared']:.4f}\n"
-                        f"Red. χ² = {gof['reduced_chi_squared']:.4f}")
+            fit_text = (f"$R^2$ = {gof['r_squared']:.4f}\n"
+                        f"Adj. $R^2$ = {gof['adj_r_squared']:.4f}\n"
+                        f"Red. $\chi^2$ = {gof['reduced_chi_squared']:.4f}\n"
+                        f"z mean = {gof['z_mean']:.3f}, z std = {gof['z_std']:.3f}\n"
+                        f"lag-1 autocorr = {gof['lag1_autocorr']:.3f}")
             ax_main.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
                             va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7))
         
@@ -1074,6 +1105,10 @@ class XPSFitter:
             report.append(f"Adjusted R-squared: {gof['adj_r_squared']:.6f}")
             report.append(f"Chi-squared: {gof['chi_squared']:.6f}")
             report.append(f"Reduced chi-squared: {gof['reduced_chi_squared']:.6f}")
+            
+            report.append(f"z mean: {gof['z_mean']:.6f}")
+            report.append(f"z std: {gof['z_std']:.6f}")
+            report.append(f"lag-1 autocorr of residuals: {gof['lag1_autocorr']:.6f}")
         
         return "\n".join(report)
 
@@ -1269,22 +1304,34 @@ if __name__ == "__main__":
         """
     
     # Insert here your own .csv data file and configuration file
+    
+    # Si2p
+    # config_path = 'configs/Si2p_fit_config_no_constr.yaml'
+    # file_path = 'tests/20241011_2/output_data/Si2p.xy_Spectrum_6.csv'
+    
+    # C1s
+    # config_path = 'configs/C1s_fit_config_no_constr.yaml'
+    # file_path = 'tests/20241011_2/output_data/C1s.xy_Spectrum_5.csv'
+    
+    # C1s_reference
     config_path = 'configs/C1s_fit_config_no_constr.yaml'
     file_path = 'tests/20241011_2/output_data/C1s_reference.xy_C1s_2.csv'
     
-    csvFile = pd.read_csv(file_path, comment='#')
+    csvFile, metadata = read_xps_csv(file_path)
     
     be = csvFile['Binding Energy'].to_numpy()
     counts = csvFile['Counts per Second'].to_numpy()
     
-    # Normalize data (optional)
+    # Do not normalize your data before fitting, unless you also rescale the variances consistently. 
+    # Reduced chi-squared is only interpretable when your denominators reflect the true noise model in the same units as the data.
+    
     # counts -= np.min(counts)
     # counts /= np.max(counts)
     
     spectrum = XPSSpectrum(be, counts)
     fitter = XPSFitter(spectrum)
     
-    fitter.load_config_from_file(config_path).fit()
+    fitter.load_config_from_file(config_path).fit(dwell_time=metadata['dwell_time'], n_scans=metadata['n_scans'])
     
     # Print results in terminal
     fit_report = fitter.get_fit_report()
@@ -1319,4 +1366,4 @@ if __name__ == "__main__":
     plt.show()
     
     # # Save all results to files
-    # fitter.save_results('tests/C_1s_reference_fit/C_1s_3fit_no_constr_norm')
+    fitter.save_results('tests/C_1s_reference_fit/C_1s_3fit_no_constr')
