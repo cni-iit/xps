@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.gridspec as gridspec
@@ -859,8 +860,7 @@ class XPSFitter:
         # Reduced chi-squared
         red_chi_squared = chi_squared / (n - p) if n > p else np.inf
         
-        z = residuals / np.sqrt(denom)
-        print("z mean, std:", np.nanmean(z), np.nanstd(z))
+        z_scores = (residuals - np.mean(residuals)) / np.std(residuals) if np.std(residuals) != 0 else np.zeros_like(residuals)
         
         # autocorrelation lag-1
         def lag1_autocorr(a):
@@ -877,9 +877,9 @@ class XPSFitter:
             'adj_r_squared': adj_r_squared,
             'chi_squared': chi_squared,
             'reduced_chi_squared': red_chi_squared,
-            'z_mean': np.nanmean(z),
-            'z_std': np.nanstd(z),
-            'lag1_autocorr': lag1_autocorr(residuals)
+            'r_mean': np.mean(residuals),
+            'r_std': np.std(residuals),
+            'lag1_autocorr': pd.Series(z_scores).autocorr(lag=1)
         }
         
         return self
@@ -990,8 +990,8 @@ class XPSFitter:
             # Fallback: if residuals are very small, avoid step=0
             if step == 0:
                 step = max(1, int(round(raw_step)))
-            ax_res.set_ylabel('Residuals (counts/s)')
-            ax_res.set_xlabel('Binding Energy (eV)')
+            ax_res.set_ylabel('Residuals, counts/s')
+            ax_res.set_xlabel('Binding Energy, eV')
             ax_res.grid(True, alpha=0.3)
             ax_res.yaxis.set_major_locator(
                 ticker.MultipleLocator(step)
@@ -1016,10 +1016,10 @@ class XPSFitter:
             pdf_vals = norm.pdf(y_vals, mu, sigma)
 
             # Normalize to match histogram scaling (density=True handles it)
-            ax_hist.plot(pdf_vals, y_vals, 'r-', lw=2, label=f'Gaussian\n$\\mu={mu:.3f}$\n$\\sigma={sigma:.3f}$')
+            ax_hist.plot(pdf_vals, y_vals, 'r-', lw=2, label=f'Gaussian')
             ax_hist.axhline(y=0, color='black', linestyle='-', alpha=0.5)
 
-            ax_hist.set_xlabel("Density (a.u.)")
+            ax_hist.set_xlabel("Density, a.u.")
             ax_hist.grid(True, alpha=0.3)
             ax_hist.legend(loc="lower right", frameon=True, fontsize='x-small')
 
@@ -1027,9 +1027,9 @@ class XPSFitter:
             plt.setp(ax_hist.get_yticklabels(), visible=False)
         
         # Labels and legend
-        ax_main.set_ylabel('Counts per second (counts/s)')
+        ax_main.set_ylabel('Counts per second, counts/s')
         if not show_residuals:
-            ax_main.set_xlabel('Binding Energy (eV)')
+            ax_main.set_xlabel('Binding Energy, eV')
         ax_main.grid(which='major', alpha=0.3)
         ax_main.legend(loc='center left', frameon=True, fontsize='small')
         ax_main.xaxis.set_major_locator(ticker.MultipleLocator(1))
@@ -1061,7 +1061,7 @@ class XPSFitter:
             fit_text = (f"$R^2$ = {gof['r_squared']:.4f}\n"
                         f"Adj. $R^2$ = {gof['adj_r_squared']:.4f}\n"
                         f"Red. $\chi^2$ = {gof['reduced_chi_squared']:.4f}\n"
-                        f"z mean = {gof['z_mean']:.3f}, z std = {gof['z_std']:.3f}\n"
+                        f"R mean = {gof['r_mean']:.3f}, R std = {gof['r_std']:.3f}\n"
                         f"lag-1 autocorr = {gof['lag1_autocorr']:.3f}")
             ax_main.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
                             va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7))
@@ -1129,8 +1129,8 @@ class XPSFitter:
             report.append(f"Chi-squared: {gof['chi_squared']:.6f}")
             report.append(f"Reduced chi-squared: {gof['reduced_chi_squared']:.6f}")
             
-            report.append(f"z mean: {gof['z_mean']:.6f}")
-            report.append(f"z std: {gof['z_std']:.6f}")
+            report.append(f"R mean: {gof['r_mean']:.6f}")
+            report.append(f"R std: {gof['r_std']:.6f}")
             report.append(f"lag-1 autocorr of residuals: {gof['lag1_autocorr']:.6f}")
         
         return "\n".join(report)
