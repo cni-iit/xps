@@ -905,7 +905,7 @@ class XPSFitter:
                 if show_residual_hist:
                     fig = plt.figure(figsize=figsize, dpi=dpi)
                     gs = gridspec.GridSpec(2, 2, width_ratios=[4, 1], height_ratios=[3, 1],
-                                        wspace=0.05, hspace=0.10)
+                                        wspace=0.05, hspace=0.05)
                     ax_main = fig.add_subplot(gs[0, 0])
                     ax_res  = fig.add_subplot(gs[1, 0], sharex=ax_main)
                     ax_hist = fig.add_subplot(gs[1, 1], sharey=ax_res)
@@ -924,6 +924,7 @@ class XPSFitter:
         
         # Plot original data
         ax_main.scatter(x, y, s=20, alpha=0.7, label='Data', color='black')
+        ax_main.set_ylim(0.95*np.min(y), 1.05*np.max(y))
         
         # Background
         if show_background and np.any(background != 0):
@@ -944,6 +945,7 @@ class XPSFitter:
         
         # Residuals
         if show_residuals and ax_res is not None:
+            plt.setp(ax_main.get_xticklabels(), visible=False)
             ax_res.plot(x, residuals, 'o-', markersize=3, color='blue')
             ax_res.axhline(y=0, color='black', linestyle='-', alpha=0.5)
             
@@ -992,7 +994,7 @@ class XPSFitter:
                 step = max(1, int(round(raw_step)))
             ax_res.set_ylabel('Residuals, counts/s')
             ax_res.set_xlabel('Binding Energy, eV')
-            ax_res.grid(True, alpha=0.3)
+            # ax_res.grid(True, alpha=0.3)
             ax_res.yaxis.set_major_locator(
                 ticker.MultipleLocator(step)
                 )
@@ -1020,7 +1022,7 @@ class XPSFitter:
             ax_hist.axhline(y=0, color='black', linestyle='-', alpha=0.5)
 
             ax_hist.set_xlabel("Density, a.u.")
-            ax_hist.grid(True, alpha=0.3)
+            # ax_hist.grid(True, alpha=0.3)
             ax_hist.legend(loc="lower right", frameon=True, fontsize='x-small')
 
             # Hide duplicate y ticks
@@ -1030,7 +1032,7 @@ class XPSFitter:
         ax_main.set_ylabel('Counts per second, counts/s')
         if not show_residuals:
             ax_main.set_xlabel('Binding Energy, eV')
-        ax_main.grid(which='major', alpha=0.3)
+        # ax_main.grid(which='major', alpha=0.3)
         ax_main.legend(loc='center left', frameon=True, fontsize='small')
         ax_main.xaxis.set_major_locator(ticker.MultipleLocator(1))
         ax_main.xaxis.set_minor_locator(ticker.MultipleLocator(0.1))
@@ -1148,9 +1150,9 @@ class XPSFitter:
         
         # Save plot
         fig, _ = self.plot_results()
-        fig.savefig(f"{filename_prefix}_fit.png", dpi=300, bbox_inches='tight')
-        fig.savefig(f"{filename_prefix}_fit.svg", dpi=300, bbox_inches='tight', transparent=True)
-        fig.savefig(f"{filename_prefix}_fit.eps", dpi=300, bbox_inches='tight', transparent=True)
+        fig.savefig(f"{filename_prefix}_fit.png", dpi=96, bbox_inches='tight')
+        fig.savefig(f"{filename_prefix}_fit.svg", dpi=96, bbox_inches='tight', transparent=True)
+        fig.savefig(f"{filename_prefix}_fit.eps", dpi=96, bbox_inches='tight', transparent=True)
         plt.close(fig)
         
         # Save fit report
