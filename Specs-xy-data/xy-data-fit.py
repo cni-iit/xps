@@ -928,7 +928,7 @@ class XPSFitter:
         
         # Background
         if show_background and np.any(background != 0):
-            ax_main.plot(x, background, '--', color='gray', alpha=0.7,
+            ax_main.plot(x, background, '--', color='black', alpha=0.7, lw=3,
                         label=f'Background\ntype: {self.fit_config.background_type}')
         
         # Components
@@ -939,6 +939,8 @@ class XPSFitter:
                 ax_main.axline(xy1=(component['params']['center'], ax_main.get_ylim()[0]),
                                xy2=(component['params']['center'], component['params']['amplitude']),
                                linestyle=':', alpha=0.5)
+                ax_main.fill_between(x, background, component['y_values'] + background,
+                                    alpha=0.25)
         
         # Total fit
         ax_main.plot(x, y_fit + background, 'r-', linewidth=2, label='Fit')
@@ -1066,10 +1068,10 @@ class XPSFitter:
                         f"R mean = {gof['r_mean']:.3f}, R std = {gof['r_std']:.3f}\n"
                         f"lag-1 autocorr = {gof['lag1_autocorr']:.3f}")
             ax_main.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
-                            va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7))
+                            va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7), fontsize='small')
         
         
-        plt.tight_layout()
+        # plt.tight_layout()
         return fig, (ax_main, ax_res, ax_hist)
     
     def get_fit_report(self):
@@ -1353,6 +1355,8 @@ if __name__ == "__main__":
     # counts -= np.min(counts)
     # counts /= np.max(counts)
     
+    # counts = savgol_filter(counts, 7, 2)  # Smooth data with Savitzky-Golay filter to reduce noise
+    
     spectrum = XPSSpectrum(be, counts)
     fitter = XPSFitter(spectrum)
     
@@ -1391,4 +1395,4 @@ if __name__ == "__main__":
     plt.show()
     
     # # Save all results to files
-    fitter.save_results('tests/C_1s_reference_fit/C_1s_3fit_no_constr')
+    fitter.save_results('tests/C_1s_reference_fit/C_1s_3fit_no_constr_new')

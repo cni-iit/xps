@@ -1,0 +1,113 @@
+background_params:
+  max_iterations: 200
+  tolerance: 1.0e-06
+background_type: shirley        # 'linear', 'shirley', 'tougaard', 'none'
+energy_range:
+- 282
+- 289
+ftol: 1.0e-10
+max_iterations: 2000
+method: trf
+
+sigma_type: poisson             # 'poisson' ( y for std**2), 'gamma'( sqrt(y) for std**2) or 'constant' (std**2 of residuals)
+
+# peaks:
+# - center_bounds:
+#   - 284.4                     # lower bound of the peak center
+#   - 285.2                     # upper bound of the peak center
+#   fwhm_bounds:
+#   - 0.8                       # lower bound of the peak FWHM
+#   - 2.0                       # upper bound of the peak FWHM
+#   initial_amplitude: 1000     # initial guess for the peak amplitude
+#   initial_center: 284.8       # initial guess for the peak center
+#   initial_fwhm: 1.0           # initial guess for the peak FWHM
+#   type: gaussian              # 'gaussian', 'lorentzian', 'voigt', 'doniach_sunjic', 'asymmetric_voigt'
+
+peaks:
+- center_bounds:                # main C peak from SiC
+  - 283.9
+  - 284.2
+  fwhm_bounds:
+  - 0.0
+  - 2.00
+  amplitude_bounds:
+  - 0
+  - 10000
+  initial_amplitude: 2100
+  initial_center: 284.1
+  initial_fwhm: 0.8
+  type: voigt
+
+- center_bounds:                # buffer layer graphene peak S1
+  - 284.97
+  - 285.2
+  fwhm_bounds:
+  - 0.0
+  - 1.2
+  amplitude_bounds:
+  - 0
+  - 1000
+  initial_amplitude: 590
+  initial_center: 285
+  initial_fwhm: 0.8
+  type: voigt
+
+- center_bounds:                # buffer layer graphene peak S2
+  - 285.8
+  - 286.1
+  fwhm_bounds:
+  - 0.0
+  - 1.2
+  amplitude_bounds:
+  - 0
+  - 1000
+  initial_amplitude: 900
+  initial_center: 286
+  initial_fwhm: 0.8
+  type: voigt
+
+- center_bounds:                # graphene peak
+  - 284.3
+  - 284.6
+  fwhm_bounds:
+  - 0.0
+  - 2.00
+  amplitude_bounds:
+  - 0
+  - 10000
+  initial_amplitude: 2100
+  initial_center: 284.45
+  initial_fwhm: 0.8
+  initial_asymmetry: 0.2
+  asymmetry_bounds:
+  - 0.0
+  - 0.5
+  type: doniach_sunjic
+
+- center_bounds:                # buffer layer graphene peak S1'
+  - 285.0
+  - 285.3
+  fwhm_bounds:
+  - 0.0
+  - 1.2
+  amplitude_bounds:
+  - 0
+  - 1000
+  initial_amplitude: 590
+  initial_center: 285.1
+  initial_fwhm: 0.8
+  type: voigt
+
+- center_bounds:                # buffer layer graphene peak S2'
+  - 285.25
+  - 285.35
+  fwhm_bounds:
+  - 0.0
+  - 1.2
+  amplitude_bounds:
+  - 0
+  - 1000
+  initial_amplitude: 900
+  initial_center: 285.3
+  initial_fwhm: 0.8
+  type: voigt
