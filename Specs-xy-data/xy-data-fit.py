@@ -3,6 +3,8 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import matplotlib.gridspec as gridspec
+from matplotlib import rcParams
+rcParams['font.size'] = 18
 from scipy.optimize import curve_fit, minimize
 from scipy import integrate
 from scipy.special import wofz
@@ -59,42 +61,103 @@ def lorentzian(x, amplitude, center, fwhm):
 
 def voigt(x, amplitude, center, fwhm_g, fwhm_l):
     """Accurate Voigt profile using the Faddeeva function (scipy.special.wofz)."""
+    fwhm_g = max(fwhm_g, 1e-6)
+    fwhm_l = max(fwhm_l, 1e-6)
     sigma = fwhm_g / (2 * np.sqrt(2 * np.log(2)))
     gamma = fwhm_l / 2
     z = ((x - center) + 1j * gamma) / (sigma * np.sqrt(2))
     profile = np.real(wofz(z)) / (sigma * np.sqrt(2 * np.pi))
     return amplitude * profile
 
-def doniach_sunjic(x, amplitude, center, fwhm, asymmetry):
-    """Doniach-Sunjic asymmetric line shape for XPS."""
-    gamma = fwhm / 2
-    arg = (x - center) / gamma
-    
-    # Handle potential numerical issues
-    safe_arg = np.where(np.abs(arg) < 1e-10, 1e-10, arg)
-    
-    # Calculate the DS function with asymmetry parameter
-    ds = np.cos(np.pi * asymmetry / 2 + (1 - asymmetry) * np.arctan(safe_arg))
-    ds *= np.power(1 + arg**2, (1 - asymmetry) / 2)
-    
-    return amplitude * ds / (1 + arg**2)**(0.5)
+def doniach_sunjic(x, amplitude, center, fwhm, asymmetry, epsilon=1e-10):
+    """
+    Corrected Doniach-Sunjic line shape for XPS.
+    Asymmetry tail appears on HIGH binding energy side (left in descending XPS plot).
 
-def asymmetric_voigt(x, amplitude, center, fwhm_g, fwhm_l, asymmetry):
-    """Asymmetric Voigt function by combining Voigt with Doniach-Sunjic."""
-    v = voigt(x, 1.0, center, fwhm_g, fwhm_l)
-    ds = doniach_sunjic(x, 1.0, center, (fwhm_g + fwhm_l)/2, asymmetry)
-    
-    # Normalize
-    v_max = np.max(v)
-    ds_max = np.max(ds)
-    
-    if v_max > 0 and ds_max > 0:
-        v = v / v_max
-        ds = ds / ds_max
-        
-    # Mix based on asymmetry parameter
-    mix = v * (1 - abs(asymmetry)/2) + ds * (abs(asymmetry)/2)
-    return amplitude * mix / np.max(mix)
+    Parameters:
+    -----------
+    x : array
+        Binding energy (eV) – typically in descending order (high→low BE)
+    amplitude : float
+        Scaling factor (peak height approximates amplitude * cos(π·α/2) / γ^(1-α) )
+    center : float
+        Peak position (eV)
+    fwhm : float
+        Full width at half maximum (eV)
+    asymmetry : float
+        Asymmetry parameter (0 = symmetric Lorentzian)
+        Positive values give tail on HIGH binding energy side.
+        Typical range: 0.02–0.2 for metals.
+    epsilon : float
+        Small number to avoid division by zero.
+    """
+    gamma = max(fwhm / 2, epsilon)          # HWHM
+    alpha = asymmetry
+
+    # Use (center - x) so that for x > center (high BE) the argument is negative.
+    # This makes the arctan term negative, producing a tail on the high BE side.
+    arg = (center - x) / gamma
+    safe_arg = np.where(np.abs(arg) < epsilon, epsilon, arg)
+
+    numerator = np.cos(np.pi * alpha / 2 + (1 - alpha) * np.arctan(safe_arg))
+    denominator = ((x - center)**2 + gamma**2) ** ((1 - alpha) / 2)
+    denominator = np.where(denominator < epsilon, epsilon, denominator)
+
+    return amplitude * numerator / denominator
+
+def asymmetric_voigt(
+    x,
+    area,
+    center,
+    fwhm_g,
+    fwhm_l,
+    asymmetry=0.0
+):
+    """
+    Physically meaningful asymmetric Voigt.
+
+    Parameters
+    ----------
+    x : array
+    area : float
+        Integrated peak area (NOT height!)
+    center : float
+    fwhm_g : float
+        Gaussian FWHM (usually instrumental -> often fixed)
+    fwhm_l : float
+        Lorentzian FWHM
+    asymmetry : float
+        0 = symmetric
+        typical XPS metal peaks: 0.02 – 0.2
+
+    Returns
+    -------
+    peak : array
+    """
+
+    # --- safety ---
+    fwhm_g = max(fwhm_g, 1e-6)
+    fwhm_l = max(fwhm_l, 1e-6)
+
+    # convert FWHM -> sigma/gamma
+    sigma = fwhm_g / (2 * np.sqrt(2 * np.log(2)))
+
+    # asymmetry as linear broadening on high BE side
+    gamma = fwhm_l / 2
+
+    gamma_x = gamma * (1 + asymmetry * (x - center))
+
+    # forbid negative widths
+    gamma_x = np.clip(gamma_x, gamma * 0.2, gamma * 5)
+
+    z = ((x - center) + 1j * gamma_x) / (sigma * np.sqrt(2))
+
+    profile = np.real(wofz(z)) / (sigma * np.sqrt(2 * np.pi))
+
+    # normalize by area
+    profile /= np.trapezoid(profile, x)
+
+    return area * profile
 
 # Background functions
 def linear_background(x, slope, intercept):
@@ -325,6 +388,7 @@ def calculate_asymmetric_voigt_fwhm(amplitude, center, fwhm_g, fwhm_l, asymmetry
 class PeakConfig:
     """Configuration for a peak in XPS fitting."""
     peak_type: str  # 'gaussian', 'lorentzian', 'voigt', 'doniach_sunjic', 'asymmetric_voigt'
+    peak_name: str
     initial_amplitude: float
     initial_center: float
     initial_fwhm: float
@@ -420,6 +484,7 @@ class XPSFitter:
         peaks_configs = []
         for peak_dict in config_dict.get('peaks', []):
             peak_config = PeakConfig(
+                peak_name=peak_dict.get('name', 'unknown'),
                 peak_type=peak_dict.get('type', 'gaussian'),
                 initial_amplitude=peak_dict.get('initial_amplitude', 1.0),
                 initial_center=peak_dict.get('initial_center', 0.0),
@@ -682,6 +747,7 @@ class XPSFitter:
                 amplitude, center, fwhm = params[param_idx:param_idx+n_params]
                 y_component = gaussian(x, amplitude, center, fwhm)
                 components.append({
+                    'name': peak.peak_name,
                     'type': 'gaussian',
                     'params': {
                         'amplitude': amplitude,
@@ -696,6 +762,7 @@ class XPSFitter:
                 amplitude, center, fwhm = params[param_idx:param_idx+n_params]
                 y_component = lorentzian(x, amplitude, center, fwhm)
                 components.append({
+                    'name': peak.peak_name,
                     'type': 'lorentzian',
                     'params': {
                         'amplitude': amplitude,
@@ -710,6 +777,7 @@ class XPSFitter:
                 amplitude, center, fwhm_g, fwhm_l = params[param_idx:param_idx+n_params]
                 y_component = voigt(x, amplitude, center, fwhm_g, fwhm_l)
                 components.append({
+                    'name': peak.peak_name,
                     'type': 'voigt',
                     'params': {
                         'amplitude': amplitude,
@@ -725,6 +793,7 @@ class XPSFitter:
                 amplitude, center, fwhm, asymmetry = params[param_idx:param_idx+n_params]
                 y_component = doniach_sunjic(x, amplitude, center, fwhm, asymmetry)
                 components.append({
+                    'name': peak.peak_name,
                     'type': 'doniach_sunjic',
                     'params': {
                         'amplitude': amplitude,
@@ -740,6 +809,7 @@ class XPSFitter:
                 amplitude, center, fwhm_g, fwhm_l, asymmetry = params[param_idx:param_idx+n_params]
                 y_component = asymmetric_voigt(x, amplitude, center, fwhm_g, fwhm_l, asymmetry)
                 components.append({
+                    'name': peak.peak_name,
                     'type': 'asymmetric_voigt',
                     'params': {
                         'amplitude': amplitude,
@@ -751,6 +821,9 @@ class XPSFitter:
                     'y_values': y_component
                 })
                 
+            # components.append({
+            #     'name': peak.peak_name,
+            # })
             param_idx += n_params
             
         return components
@@ -772,7 +845,7 @@ class XPSFitter:
         
         # Prepare initial parameters and bounds
         initial_params, bounds, fixed_param_values = self._prepare_initial_params_and_bounds()
-        
+        logger.info(f"Number of free params: {len(initial_params)}")
         # Estimate sigma for fitting
         # sigma = np.sqrt(np.clip(y_no_bg, 0, None) + 0.1)  # Avoid zero or negative values
         
@@ -783,10 +856,14 @@ class XPSFitter:
                 model_func, x, y_no_bg, fixed_param_values)
             
             # Use minimize instead of curve_fit for more flexibility
+            # Convert bounds format: from (lower_array, upper_array) to list of tuples
+            bounds_list = list(zip(bounds[0], bounds[1]))
+            
             res = minimize(
                 lambda p: np.sum(obj_func(p)**2),
                 initial_params,
-                method='BFGS',
+                bounds=bounds_list,
+                method='L-BFGS-B',
                 options={'maxiter': self.fit_config.max_iterations}
             )
             
@@ -802,7 +879,6 @@ class XPSFitter:
                     free_idx += 1
                     
             params = full_params
-            perr = np.zeros_like(params)  # No standard errors in this case
             
         else:
             # Use curve_fit
@@ -819,6 +895,9 @@ class XPSFitter:
             # Calculate parameter errors from covariance matrix
             perr = np.sqrt(np.diag(pcov))
         
+        self.fixed_param_indices = fixed_param_values.keys() if fixed_param_values else []
+        self.fixed_param_values = fixed_param_values.copy()
+        
         # Calculate fitted curve and residuals
         y_fit = model_func(x, *params)
         residuals = y_no_bg - y_fit
@@ -826,17 +905,7 @@ class XPSFitter:
         # Extract individual peak components
         peak_components = self._extract_peak_components(x, params)
         
-        # Store results
-        self.fit_result = {
-            'x': x,
-            'y': y,
-            'background': background,
-            'y_fit': y_fit,
-            'params': params,
-            'perr': perr,
-            'residuals': residuals,
-            'peak_components': peak_components
-        }
+        
         
         self.peak_components = peak_components
         
@@ -871,6 +940,57 @@ class XPSFitter:
         
         print("lag-1 autocorr of residuals: ", lag1_autocorr(residuals))
         
+        if fixed_param_values:
+            # ... after fitting with minimize ...
+            
+            # Better error estimation using finite differences
+            try:
+                # Calculate Hessian numerically if not available
+                if not hasattr(res, 'hess_inv') or res.hess_inv is None:
+                    from scipy.optimize import approx_fprime
+                    n_params = len(initial_params)
+                    hess = np.zeros((n_params, n_params))
+                    eps = 1e-6
+                    
+                    # Approximate Hessian
+                    for i in range(n_params):
+                        for j in range(i, n_params):
+                            # Finite difference approximation
+                            params_i = initial_params.copy()
+                            params_j = initial_params.copy()
+                            params_i[i] += eps
+                            params_j[j] += eps
+                            
+                            # Calculate gradient differences
+                            # (This is simplified - you might want a more robust method)
+                            pass
+                    
+                    cov = np.linalg.inv(hess) * (sse / (n - p))
+                else:
+                    # Use the inverse Hessian from minimize
+                    hess_inv = res.hess_inv.todense()
+                    cov = hess_inv * (sse / (n - p))
+                
+                perr = np.sqrt(np.diag(cov))
+                # Handle potential negative values on diagonal
+                perr = np.where(perr >= 0, perr, 0)
+                
+            except Exception as e:
+                logger.warning(f"Could not calculate parameter errors: {e}")
+                perr = np.full(len(initial_params), np.nan)
+        
+        # Store results
+        self.fit_result = {
+            'x': x,
+            'y': y,
+            'background': background,
+            'y_fit': y_fit,
+            'params': params,
+            'perr': perr,
+            'residuals': residuals,
+            'peak_components': peak_components
+        }
+        
         self.fit_result['goodness_of_fit'] = {
             'sse': sse,
             'r_squared': r_squared,
@@ -886,7 +1006,7 @@ class XPSFitter:
     
     def plot_results(self, fig=None, ax=None, figsize=(10, 8), show_components=True, 
                     show_residuals=True, show_background=True, dpi=100,
-                    show_residual_hist=True, bins=30):
+                    show_residual_hist=True, bins=30, show_gof=True):
         """Plot the fitting results with optional residual histogram."""
         if self.fit_result is None:
             raise ValueError("No fit results available. Run fit() first.")
@@ -929,16 +1049,20 @@ class XPSFitter:
         # Background
         if show_background and np.any(background != 0):
             ax_main.plot(x, background, '--', color='black', alpha=0.7, lw=3,
-                        label=f'Background\ntype: {self.fit_config.background_type}')
+                        label=f'Bg: {self.fit_config.background_type.capitalize()}')
         
         # Components
         if show_components:
             for i, component in enumerate(peak_components):
                 ax_main.plot(x, component['y_values'] + background, '-', alpha=0.6,
-                            label=f"{component['type']}\nat {component['params']['center']:.2f} eV")
-                ax_main.axline(xy1=(component['params']['center'], ax_main.get_ylim()[0]),
-                               xy2=(component['params']['center'], component['params']['amplitude']),
-                               linestyle=':', alpha=0.5)
+                            label = f"{component.get('name', component['type'])}" \
+                            ""
+                            # f"{component['params']['center']:.2f} eV"
+                            )
+                # Vertical line
+                # ax_main.axline(xy1=(component['params']['center'], ax_main.get_ylim()[0]),
+                #                xy2=(component['params']['center'], component['params']['amplitude']),
+                #                linestyle=':', alpha=0.5)
                 ax_main.fill_between(x, background, component['y_values'] + background,
                                     alpha=0.25)
         
@@ -1031,11 +1155,11 @@ class XPSFitter:
             plt.setp(ax_hist.get_yticklabels(), visible=False)
         
         # Labels and legend
-        ax_main.set_ylabel('Counts per second, counts/s')
+        ax_main.set_ylabel('Intensity, counts/s')
         if not show_residuals:
             ax_main.set_xlabel('Binding Energy, eV')
         # ax_main.grid(which='major', alpha=0.3)
-        ax_main.legend(loc='center left', frameon=True, fontsize='small')
+        ax_main.legend(loc='center left', frameon=True, fontsize='x-small')
         ax_main.xaxis.set_major_locator(ticker.MultipleLocator(1))
         ax_main.xaxis.set_minor_locator(ticker.MultipleLocator(0.1))
         
@@ -1054,13 +1178,13 @@ class XPSFitter:
         
         
         # Invert X (XPS convention)
-        if x[0] < x[-1]:
-            ax_main.invert_xaxis()
-        if ax_res is not None:
-            ax_res.invert_xaxis()
+        # if x[0] > x[-1]:
+        ax_main.invert_xaxis()
+        # if ax_res is not None:
+        #     ax_res.invert_xaxis()
         
         # Add goodness of fit text
-        if 'goodness_of_fit' in self.fit_result:
+        if 'goodness_of_fit' in self.fit_result and show_gof:
             gof = self.fit_result['goodness_of_fit']
             fit_text = (f"$R^2$ = {gof['r_squared']:.4f}\n"
                         f"Adj. $R^2$ = {gof['adj_r_squared']:.4f}\n"
@@ -1070,7 +1194,7 @@ class XPSFitter:
             ax_main.annotate(fit_text, xy=(0.02, 0.97), xycoords='axes fraction',
                             va='top', ha='left', bbox=dict(boxstyle='round', fc='white', alpha=0.7), fontsize='small')
         
-        
+        self.last_plot_fig = fig
         # plt.tight_layout()
         return fig, (ax_main, ax_res, ax_hist)
     
@@ -1083,7 +1207,15 @@ class XPSFitter:
         
         # Add fitting range
         if self.x_fit is not None:
-            report.append(f"Fitting range: {min(self.x_fit):.2f} - {max(self.x_fit):.2f} eV\n")
+            energy_range = max(self.x_fit) - min(self.x_fit)
+            n_points = len(self.x_fit)
+            avg_step = np.mean(np.diff(self.x_fit))
+            std_step = np.std(np.diff(self.x_fit))
+            report.append(f"Fitting E range: {min(self.x_fit):.2f} - {max(self.x_fit):.2f} eV\n")
+            report.append(f"Number of E points: {n_points}\n")
+            report.append(f"Average E step size (mean+std): {avg_step:.4f} ± {std_step:.4f} eV\n")
+            report.append(f"Estimated E resolution (avg step): {avg_step:.4f} eV\n")
+            report.append(f"Total E range: {energy_range:.2f} eV\n")
         else:
             report.append("Fitting range: Not available (x_fit is None)\n")
         
@@ -1099,19 +1231,34 @@ class XPSFitter:
         # Add peak info
         report.append("Fitted Peaks:")
         report.append("-" * 15)
+        # Keep track of parameter indices
+        total_param_index = 0  # Index in the FULL parameter list
+        free_param_index = 0   # Index in the perr array (only free parameters)
         
-        param_index = 0  # track position inside params/perr arrays
         for i, component in enumerate(self.peak_components):
             params = component["params"]
-            report.append(f"Peak {i+1} ({component['type']}):")
+            report.append(f"Peak {i+1} ({component.get('name', 'unknown name')}, {component['type']}):")
             
             for name, value in params.items():
-                if perr is not None and param_index < len(perr):
-                    err = perr[param_index]
-                    report.append(f"  {name}: {value:.4f} +/- {err:.4f}")
+                # Check if this parameter was fixed
+                is_fixed = False
+                if hasattr(self, 'fixed_param_indices'):
+                    is_fixed = total_param_index in self.fixed_param_indices
+                
+                if not is_fixed and perr is not None and free_param_index < len(perr):
+                    err = perr[free_param_index]
+                    if err is not None and not np.isnan(err) and err > 0:
+                        report.append(f"  {name}: {value:.4f} +/- {err:.4f}")
+                    else:
+                        report.append(f"  {name}: {value:.4f} (error calculation failed)")
+                    free_param_index += 1
                 else:
-                    report.append(f"  {name}: {value:.4f}")
-                param_index += 1
+                    if is_fixed:
+                        report.append(f"  {name}: {value:.4f} (fixed)")
+                    else:
+                        report.append(f"  {name}: {value:.4f} (no error)")
+                
+                total_param_index += 1
             
             # Calculate peak area
             x = self.fit_result["x"]
@@ -1151,7 +1298,14 @@ class XPSFitter:
             os.makedirs(directory)
         
         # Save plot
-        fig, _ = self.plot_results()
+        # Check if we have a stored plot, otherwise create one
+        if hasattr(self, 'last_plot_fig') and self.last_plot_fig is not None:
+            fig = self.last_plot_fig
+            # Optionally, you might want to create a fresh copy to avoid modifying the original
+            # fig = self.last_plot_fig  # Just use it as is
+        else:
+            # Create a new plot
+            fig, _ = self.plot_results()
         fig.savefig(f"{filename_prefix}_fit.png", dpi=96, bbox_inches='tight')
         fig.savefig(f"{filename_prefix}_fit.svg", dpi=96, bbox_inches='tight', transparent=True)
         fig.savefig(f"{filename_prefix}_fit.eps", dpi=96, bbox_inches='tight', transparent=True)
@@ -1235,14 +1389,353 @@ class XPSFitter:
         
         return width_results
 
-
+class XPSSpectrum:
+    def __init__(self, binding_energy, counts_per_second):
+        self.binding_energy = binding_energy
+        self.counts_per_second = counts_per_second
+        self.filtered_counts = None  # Store filtered data
+        self.filter_type = None      # Store filter type used
+    
+    def fft_filter(self, filter_type='lowpass', cutoff_freq=None, cutoff_fraction=0.1, 
+                window_type='hann', pad_factor=2, padding_mode='symmetric'):
+        """
+        Apply FFT-based filtering to the spectrum.
+        
+        Parameters:
+        -----------
+        filter_type : str
+            'lowpass', 'highpass', 'bandpass', or 'bandstop'
+        cutoff_freq : float or tuple
+            For lowpass/highpass: single frequency (in 1/eV units)
+            For bandpass/bandstop: tuple of (low_cutoff, high_cutoff)
+        cutoff_fraction : float
+            Fraction of Nyquist frequency to use as cutoff if cutoff_freq not specified
+        window_type : str
+            Window function for smoothing cutoff: 'rect', 'hann', 'hamming', 'blackman'
+        pad_factor : int
+            Zero-padding factor for FFT (helps with edge effects)
+        padding_mode : str
+            'symmetric', 'reflect', 'edge', 'constant' - how to pad data
+        """
+        y = self.counts_per_second.copy()
+        x = self.binding_energy
+        
+        # Sort data if not in descending order (XPS convention)
+        if x[0] < x[-1]:
+            sort_idx = np.argsort(x)[::-1]
+            x = x[sort_idx]
+            y = y[sort_idx]
+        
+        # Calculate sampling interval (in eV)
+        dx = np.mean(np.diff(x))
+        
+        # Calculate Nyquist frequency (in 1/eV)
+        nyquist_freq = 1 / (2 * dx)
+        
+        # Determine cutoff frequencies
+        if cutoff_freq is None:
+            if filter_type in ['lowpass', 'highpass']:
+                cutoff_freq = cutoff_fraction * nyquist_freq
+            else:
+                # Default band: remove middle frequencies
+                cutoff_freq = (0.1 * nyquist_freq, 0.4 * nyquist_freq)
+        
+        print(f"Filter parameters:")
+        print(f"  Sampling interval (dx): {dx:.6f} eV")
+        print(f"  Nyquist frequency: {nyquist_freq:.4f} 1/eV")
+        print(f"  Cutoff frequency: {cutoff_freq} 1/eV")
+        print(f"  Cutoff fraction: {cutoff_fraction}")
+        
+        # Apply symmetric padding to reduce edge effects
+        n_original = len(y)
+        n_padded = n_original * pad_factor
+        pad_before = (n_padded - n_original) // 2
+        pad_after = n_padded - n_original - pad_before
+        
+        # Use symmetric padding (best for FFT)
+        if padding_mode == 'symmetric':
+            y_padded = np.pad(y, (pad_before, pad_after), mode='symmetric')
+        elif padding_mode == 'reflect':
+            y_padded = np.pad(y, (pad_before, pad_after), mode='reflect')
+        elif padding_mode == 'edge':
+            y_padded = np.pad(y, (pad_before, pad_after), mode='edge')
+        else:
+            y_padded = np.pad(y, (pad_before, pad_after), mode='constant', constant_values=0)
+        
+        # Perform FFT
+        y_fft = np.fft.rfft(y_padded)
+        freqs = np.fft.rfftfreq(n_padded, d=dx)
+        
+        # Create filter mask
+        mask = self._create_fft_filter_mask(freqs, filter_type, cutoff_freq, window_type)
+        
+        # Apply filter
+        y_fft_filtered = y_fft * mask
+        
+        # Inverse FFT
+        y_filtered_padded = np.fft.irfft(y_fft_filtered, n=n_padded)
+        
+        # Remove padding - take the middle portion
+        y_filtered = y_filtered_padded[pad_before:pad_before + n_original]
+        
+        # Store results
+        self.filtered_counts = y_filtered
+        self.filter_type = filter_type
+        self.filter_params = {
+            'cutoff_freq': cutoff_freq,
+            'window_type': window_type,
+            'nyquist_freq': nyquist_freq,
+            'cutoff_fraction': cutoff_fraction
+        }
+        
+        # For debugging
+        self.debug_info = {
+            'y_padded': y_padded,
+            'y_filtered_padded': y_filtered_padded,
+            'freqs': freqs,
+            'mask': mask,
+            'y_fft_original': y_fft,
+            'y_fft_filtered': y_fft_filtered
+        }
+        
+        return y_filtered
+    
+    def _create_fft_filter_mask(self, freqs, filter_type, cutoff_freq, window_type):
+        """Create the frequency domain filter mask."""
+        mask = np.ones_like(freqs, dtype=float)
+        
+        # Window function for smooth transition
+        if window_type == 'hann':
+            window_func = lambda x: 0.5 * (1 - np.cos(np.pi * x))
+        elif window_type == 'hamming':
+            window_func = lambda x: 0.54 - 0.46 * np.cos(np.pi * x)
+        elif window_type == 'blackman':
+            window_func = lambda x: (0.42 - 0.5 * np.cos(np.pi * x) + 
+                                    0.08 * np.cos(2 * np.pi * x))
+        else:  # rectangular (sharp cutoff)
+            window_func = lambda x: 1.0
+        
+        # Apply filter based on type
+        if filter_type == 'lowpass':
+            # Lowpass: keep frequencies below cutoff
+            if isinstance(cutoff_freq, (tuple, list)):
+                cutoff = cutoff_freq[0]
+            else:
+                cutoff = cutoff_freq
+            
+            # Create transition region
+            transition_width = cutoff * 0.1
+            low_transition = cutoff - transition_width/2
+            high_transition = cutoff + transition_width/2
+            
+            for i, f in enumerate(freqs):
+                if f <= low_transition:
+                    mask[i] = 1.0
+                elif f <= high_transition:
+                    # Apply window function in transition region
+                    x_norm = (f - low_transition) / (transition_width)
+                    mask[i] = window_func(1 - x_norm)
+                else:
+                    mask[i] = 0.0
+        
+        elif filter_type == 'highpass':
+            # Highpass: keep frequencies above cutoff
+            if isinstance(cutoff_freq, (tuple, list)):
+                cutoff = cutoff_freq[0]
+            else:
+                cutoff = cutoff_freq
+            
+            transition_width = cutoff * 0.1
+            low_transition = cutoff - transition_width/2
+            high_transition = cutoff + transition_width/2
+            
+            for i, f in enumerate(freqs):
+                if f <= low_transition:
+                    mask[i] = 0.0
+                elif f <= high_transition:
+                    x_norm = (f - low_transition) / (transition_width)
+                    mask[i] = window_func(x_norm)
+                else:
+                    mask[i] = 1.0
+        
+        elif filter_type == 'bandpass':
+            # Bandpass: keep frequencies between cutoffs
+            low_cut, high_cut = cutoff_freq
+            
+            # Lower transition
+            low_transition_width = low_cut * 0.1
+            low_trans_start = low_cut - low_transition_width/2
+            low_trans_end = low_cut + low_transition_width/2
+            
+            # Upper transition
+            high_transition_width = high_cut * 0.1
+            high_trans_start = high_cut - high_transition_width/2
+            high_trans_end = high_cut + high_transition_width/2
+            
+            for i, f in enumerate(freqs):
+                if f <= low_trans_start:
+                    mask[i] = 0.0
+                elif f <= low_trans_end:
+                    x_norm = (f - low_trans_start) / low_transition_width
+                    mask[i] = window_func(x_norm)
+                elif f <= high_trans_start:
+                    mask[i] = 1.0
+                elif f <= high_trans_end:
+                    x_norm = 1 - (f - high_trans_start) / high_transition_width
+                    mask[i] = window_func(x_norm)
+                else:
+                    mask[i] = 0.0
+        
+        elif filter_type == 'bandstop':
+            # Bandstop: remove frequencies between cutoffs
+            low_cut, high_cut = cutoff_freq
+            
+            # Similar to bandpass but inverted
+            low_transition_width = low_cut * 0.1
+            low_trans_start = low_cut - low_transition_width/2
+            low_trans_end = low_cut + low_transition_width/2
+            
+            high_transition_width = high_cut * 0.1
+            high_trans_start = high_cut - high_transition_width/2
+            high_trans_end = high_cut + high_transition_width/2
+            
+            for i, f in enumerate(freqs):
+                if f <= low_trans_start:
+                    mask[i] = 1.0
+                elif f <= low_trans_end:
+                    x_norm = 1 - (f - low_trans_start) / low_transition_width
+                    mask[i] = window_func(x_norm)
+                elif f <= high_trans_start:
+                    mask[i] = 0.0
+                elif f <= high_trans_end:
+                    x_norm = (f - high_trans_start) / high_transition_width
+                    mask[i] = window_func(x_norm)
+                else:
+                    mask[i] = 1.0
+        
+        else:
+            raise ValueError(f"Unknown filter type: {filter_type}")
+        
+        return mask
+    
+    def plot_fft_analysis(self, figsize=(12, 8)):
+        """Plot the FFT analysis results."""
+        if self.filtered_counts is None:
+            raise ValueError("No filtered data available. Run fft_filter() first.")
+        
+        x = self.binding_energy
+        y_original = self.counts_per_second
+        y_filtered = self.filtered_counts
+        
+        # Sort if needed
+        if x[0] < x[-1]:
+            sort_idx = np.argsort(x)[::-1]
+            x = x[sort_idx]
+            y_original = y_original[sort_idx]
+            y_filtered = y_filtered[sort_idx]
+        
+        dx = np.mean(np.diff(x))
+        
+        # Calculate FFTs
+        n = len(y_original)
+        y_fft_original = np.fft.rfft(y_original)
+        y_fft_filtered = np.fft.rfft(y_filtered)
+        freqs = np.fft.rfftfreq(n, d=dx)
+        
+        # Power spectra
+        power_original = np.abs(y_fft_original)**2
+        power_filtered = np.abs(y_fft_filtered)**2
+        
+        fig, axes = plt.subplots(2, 3, figsize=figsize)
+        
+        # Plot 1: Original vs Filtered Spectrum
+        ax1 = axes[0, 0]
+        ax1.plot(x, y_original, 'b-', alpha=0.7, label='Original')
+        ax1.plot(x, y_filtered, 'r-', alpha=0.9, label='Filtered')
+        ax1.set_xlabel('Binding Energy (eV)')
+        ax1.set_ylabel('Intensity')
+        ax1.set_title(f'{self.filter_type.capitalize()} Filtered Spectrum')
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        if x[0] < x[-1]:
+            ax1.invert_xaxis()
+        
+        # Plot 2: Difference
+        ax2 = axes[0, 1]
+        difference = y_original - y_filtered
+        ax2.plot(x, difference, 'g-', alpha=0.7)
+        ax2.axhline(y=0, color='k', linestyle='--', alpha=0.5)
+        ax2.set_xlabel('Binding Energy (eV)')
+        ax2.set_ylabel('Difference (Original - Filtered)')
+        ax2.set_title('Removed Noise Component')
+        ax2.grid(True, alpha=0.3)
+        if x[0] < x[-1]:
+            ax2.invert_xaxis()
+        
+        # Plot 3: Power Spectrum (log scale)
+        ax3 = axes[0, 2]
+        ax3.plot(freqs[1:], power_original[1:], 'b-', alpha=0.7, label='Original')
+        ax3.plot(freqs[1:], power_filtered[1:], 'r-', alpha=0.7, label='Filtered')
+        if hasattr(self, 'filter_params'):
+            cutoff = self.filter_params['cutoff_freq']
+            if isinstance(cutoff, tuple):
+                ax3.axvline(cutoff[0], color='k', linestyle='--', alpha=0.5)
+                ax3.axvline(cutoff[1], color='k', linestyle='--', alpha=0.5)
+            else:
+                ax3.axvline(cutoff, color='k', linestyle='--', alpha=0.5, label='Cutoff')
+        ax3.set_xlabel('Frequency (1/eV)')
+        ax3.set_ylabel('Power (log scale)')
+        ax3.set_yscale('log')
+        ax3.set_title('Power Spectrum')
+        ax3.legend()
+        ax3.grid(True, alpha=0.3)
+        
+        # Plot 4: Zoomed power spectrum
+        ax4 = axes[1, 0]
+        max_freq_to_show = min(1.0, freqs[-1])  # Show up to 1 eV^-1 or max available
+        idx = freqs <= max_freq_to_show
+        ax4.plot(freqs[idx][1:], power_original[idx][1:], 'b-', alpha=0.7, label='Original')
+        ax4.plot(freqs[idx][1:], power_filtered[idx][1:], 'r-', alpha=0.7, label='Filtered')
+        if hasattr(self, 'filter_params'):
+            cutoff = self.filter_params['cutoff_freq']
+            if isinstance(cutoff, tuple):
+                ax4.axvline(cutoff[0], color='k', linestyle='--', alpha=0.5)
+                ax4.axvline(cutoff[1], color='k', linestyle='--', alpha=0.5)
+            else:
+                ax4.axvline(cutoff, color='k', linestyle='--', alpha=0.5, label='Cutoff')
+        ax4.set_xlabel('Frequency (1/eV)')
+        ax4.set_ylabel('Power')
+        ax4.set_title('Power Spectrum (Zoomed)')
+        ax4.legend()
+        ax4.grid(True, alpha=0.3)
+        
+        # Plot 5: Phase spectrum
+        ax5 = axes[1, 1]
+        phase_original = np.angle(y_fft_original)
+        phase_filtered = np.angle(y_fft_filtered)
+        ax5.plot(freqs[1:], phase_original[1:], 'b-', alpha=0.7, label='Original')
+        ax5.plot(freqs[1:], phase_filtered[1:], 'r-', alpha=0.7, label='Filtered')
+        ax5.set_xlabel('Frequency (1/eV)')
+        ax5.set_ylabel('Phase (rad)')
+        ax5.set_title('Phase Spectrum')
+        ax5.legend()
+        ax5.grid(True, alpha=0.3)
+        
+        # Plot 6: Residuals histogram
+        ax6 = axes[1, 2]
+        ax6.hist(difference, bins=50, alpha=0.7, edgecolor='black')
+        ax6.axvline(x=0, color='r', linestyle='--')
+        ax6.set_xlabel('Residual Value')
+        ax6.set_ylabel('Frequency')
+        ax6.set_title(f'Residuals Distribution\nMean: {np.mean(difference):.3f}, Std: {np.std(difference):.3f}')
+        ax6.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        return fig
+    
 
 if __name__ == "__main__":
     # Sample XPS data
-    class XPSSpectrum:
-        def __init__(self, binding_energy, counts_per_second):
-            self.binding_energy = binding_energy
-            self.counts_per_second = counts_per_second
     
     # Example usage
     is_example = False
@@ -1341,13 +1834,14 @@ if __name__ == "__main__":
     # file_path = 'tests/20241011_2/output_data/C1s.xy_Spectrum_5.csv'
     
     # C1s_reference
-    config_path = 'configs/C1s_fit_config_no_constr.yaml'
+    config_path = 'tests/configs/C1s_fit_config_4.yaml'
     file_path = 'tests/20241011_2/output_data/C1s_reference.xy_C1s_2.csv'
     
     csvFile, metadata = read_xps_csv(file_path)
     
     be = csvFile['Binding Energy'].to_numpy()
     counts = csvFile['Counts per Second'].to_numpy()
+    
     
     # Do not normalize your data before fitting, unless you also rescale the variances consistently. 
     # Reduced chi-squared is only interpretable when your denominators reflect the true noise model in the same units as the data.
@@ -1357,8 +1851,27 @@ if __name__ == "__main__":
     
     # counts = savgol_filter(counts, 7, 2)  # Smooth data with Savitzky-Golay filter to reduce noise
     
+    # Create spectrum with original data
     spectrum = XPSSpectrum(be, counts)
-    fitter = XPSFitter(spectrum)
+
+    is_fft = False
+    if is_fft:
+        # Apply FFT filter (modifies spectrum internally)
+        filtered_counts = spectrum.fft_filter(filter_type='lowpass', cutoff_fraction=0.4)
+        # Now spectrum has:
+        # - spectrum.counts_per_second: original data
+        # - spectrum.filtered_counts: filtered data
+        # - spectrum.filter_type: 'lowpass'
+
+        # Visualize FFT analysis
+        fig = spectrum.plot_fft_analysis()
+        plt.show()
+
+        # To fit with filtered data, you need to create a new XPSSpectrum object
+        # OR modify XPSFitter to use filtered_counts
+        spectrum_for_fitting = XPSSpectrum(be, counts - filtered_counts)  # Create new with filtered data
+        fitter = XPSFitter(spectrum_for_fitting)
+    else: fitter = XPSFitter(spectrum)
     
     fitter.load_config_from_file(config_path).fit(dwell_time=metadata['dwell_time'], n_scans=metadata['n_scans'])
     
@@ -1390,9 +1903,12 @@ if __name__ == "__main__":
     
     
     # Show results in a plot
-    fig, axes = fitter.plot_results(figsize=(10, 8), show_components=True)
+    fig, axes = fitter.plot_results(figsize=(10, 8), show_components=True,
+                                    show_residuals=False, show_residual_hist=True,
+                                    show_gof=False
+                                    )
     # plt.savefig('tests/result.png', dpi=300, bbox_inches='tight')
     plt.show()
     
     # # Save all results to files
-    fitter.save_results('tests/C_1s_reference_fit/C_1s_3fit_no_constr_new')
+    fitter.save_results('tests/C_1s_reference_fit/C_1s_4fit_260213')
